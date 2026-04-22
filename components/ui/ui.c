@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 static lv_obj_t *label_counter = NULL;
+static lv_obj_t *label_last_gesture = NULL;
 static int press_count = 0;
 
 static void update_counter_label(void)
@@ -9,6 +10,13 @@ static void update_counter_label(void)
     char buf[32];
     snprintf(buf, sizeof(buf), "Presses: %d", press_count);
     lv_label_set_text(label_counter, buf);
+}
+
+static void set_last_gesture(const char *name)
+{
+    if (label_last_gesture) {
+        lv_label_set_text(label_last_gesture, name);
+    }
 }
 
 void ui_init(lv_obj_t *parent)
@@ -27,12 +35,29 @@ void ui_init(lv_obj_t *parent)
     label_counter = lv_label_create(parent);
     lv_obj_set_style_text_color(label_counter, lv_color_white(), 0);
     update_counter_label();
+
+    label_last_gesture = lv_label_create(parent);
+    lv_obj_set_style_text_color(label_last_gesture, lv_color_hex(0xAAAAAA), 0);
+    lv_label_set_text(label_last_gesture, "-");
 }
 
-void ui_on_button_pressed(void)
+void ui_on_tap(void)
 {
-    press_count++;
-    if (label_counter) {
-        update_counter_label();
-    }
+    press_count += 1;
+    update_counter_label();
+    set_last_gesture("tap");
+}
+
+void ui_on_double_tap(void)
+{
+    press_count += 10;
+    update_counter_label();
+    set_last_gesture("double");
+}
+
+void ui_on_long_press(void)
+{
+    press_count = 0;
+    update_counter_label();
+    set_last_gesture("long (reset)");
 }

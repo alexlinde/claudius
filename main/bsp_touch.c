@@ -1,38 +1,80 @@
 #include "bsp_touch.h"
 
 #include <inttypes.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+
 #include "driver/touch_sens.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "iot_button.h"
+#include "button_types.h"
 #include "ui.h"
 
 #define TOUCH_CHAN_ID           9
 #define TOUCH_INIT_SCAN_TIMES  3
 #define TOUCH_THRESH_RATIO     0.02f
 
+/* iot_button timings (ms). short_press_time also defines the double-tap window;
+ * single-tap latency equals this value since we have to wait to see a second tap. */
+#define BTN_SHORT_PRESS_MS     180
+#define BTN_LONG_PRESS_MS      800
+
 static const char *TAG = "bsp_touch";
-static TaskHandle_t s_touch_task;
+static _Atomic bool s_pressed;
 
 static bool on_touch_active(touch_sensor_handle_t sens_handle,
                             const touch_active_event_data_t *event,
                             void *user_ctx)
 {
-    BaseType_t woken = pdFALSE;
-    vTaskNotifyGiveFromISR(s_touch_task, &woken);
-    return woken == pdTRUE;
+    atomic_store(&s_pressed, true);
+    return false;
 }
 
-static void touch_task(void *arg)
+static bool on_touch_inactive(touch_sensor_handle_t sens_handle,
+                              const touch_inactive_event_data_t *event,
+                              void *user_ctx)
 {
-    for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        lvgl_port_lock(0);
-        ui_on_button_pressed();
-        lvgl_port_unlock();
-    }
+    atomic_store(&s_pressed, false);
+    return false;
+}
+
+static uint8_t touch_get_key_level(button_driver_t *driver)
+{
+    (void)driver;
+    return atomic_load(&s_pressed) ? 1 : 0;
+}
+
+static button_driver_t s_touch_btn_driver = {
+    .enable_power_save = false,
+    .get_key_level     = touch_get_key_level,
+    .enter_power_save  = NULL,
+    .del               = NULL,
+};
+
+static void on_single_click(void *btn, void *usr)
+{
+    (void)btn; (void)usr;
+    lvgl_port_lock(0);
+    ui_on_tap();
+    lvgl_port_unlock();
+}
+
+static void on_double_click(void *btn, void *usr)
+{
+    (void)btn; (void)usr;
+    lvgl_port_lock(0);
+    ui_on_double_tap();
+    lvgl_port_unlock();
+}
+
+static void on_long_press_start(void *btn, void *usr)
+{
+    (void)btn; (void)usr;
+    lvgl_port_lock(0);
+    ui_on_long_press();
+    lvgl_port_unlock();
 }
 
 esp_err_t bsp_touch_init(void)
@@ -85,10 +127,9 @@ esp_err_t bsp_touch_init(void)
         touch_sensor_reconfig_channel(chan_handle, &chan_cfg),
         TAG, "Reconfig channel failed");
 
-    xTaskCreate(touch_task, "touch", 3072, NULL, 5, &s_touch_task);
-
     touch_event_callbacks_t cbs = {
-        .on_active = on_touch_active,
+        .on_active   = on_touch_active,
+        .on_inactive = on_touch_inactive,
     };
     ESP_RETURN_ON_ERROR(
         touch_sensor_register_callbacks(sens_handle, &cbs, NULL),
@@ -99,6 +140,26 @@ esp_err_t bsp_touch_init(void)
         touch_sensor_start_continuous_scanning(sens_handle),
         TAG, "Touch scan start failed");
 
-    ESP_LOGI(TAG, "Touch button on CH%d (GPIO9) ready", TOUCH_CHAN_ID);
+    button_config_t btn_cfg = {
+        .long_press_time  = BTN_LONG_PRESS_MS,
+        .short_press_time = BTN_SHORT_PRESS_MS,
+    };
+    button_handle_t btn_handle = NULL;
+    ESP_RETURN_ON_ERROR(
+        iot_button_create(&btn_cfg, &s_touch_btn_driver, &btn_handle),
+        TAG, "iot_button_create failed");
+
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_SINGLE_CLICK,     NULL, on_single_click,     NULL),
+        TAG, "register single_click failed");
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_DOUBLE_CLICK,     NULL, on_double_click,     NULL),
+        TAG, "register double_click failed");
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START, NULL, on_long_press_start, NULL),
+        TAG, "register long_press_start failed");
+
+    ESP_LOGI(TAG, "Touch button on CH%d (GPIO9) ready (short=%dms, long=%dms)",
+             TOUCH_CHAN_ID, BTN_SHORT_PRESS_MS, BTN_LONG_PRESS_MS);
     return ESP_OK;
 }
