@@ -38,9 +38,12 @@
 /*====================
    FONT SETTINGS
  *====================*/
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_MONTSERRAT_14 1   /* kept as LV_FONT_DEFAULT bootstrap */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
+
+/* lv_tiny_ttf: TrueType rasterizer for runtime-sized fonts. */
+#define LV_USE_TINY_TTF 1
+#define LV_TINY_TTF_FILE_SUPPORT 0
 
 /*====================
    WIDGETS

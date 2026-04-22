@@ -16,8 +16,10 @@
 #define TOUCH_INIT_SCAN_TIMES  3
 #define TOUCH_THRESH_RATIO     0.02f
 
-/* iot_button timings (ms). short_press_time also defines the double-tap window;
- * single-tap latency equals this value since we have to wait to see a second tap. */
+/* iot_button timings (ms). short_press_time also defines the inter-tap window
+ * within a multi-tap burst. Counting happens on PRESS_DOWN so single-tap
+ * feedback is instant; PRESS_REPEAT_DONE fires after the trailing pause and
+ * is only used to apply the double-tap bonus / relabel the gesture. */
 #define BTN_SHORT_PRESS_MS     180
 #define BTN_LONG_PRESS_MS      800
 
@@ -53,19 +55,24 @@ static button_driver_t s_touch_btn_driver = {
     .del               = NULL,
 };
 
-static void on_single_click(void *btn, void *usr)
+static void on_press_down(void *btn, void *usr)
 {
     (void)btn; (void)usr;
+    /* Fires on every physical press-down. Drives the immediate +1 so the
+     * counter tracks each tap in real time; PRESS_REPEAT_DONE then patches
+     * in any post-burst adjustment (double-tap bonus / relabel). */
     lvgl_port_lock(0);
     ui_on_tap();
     lvgl_port_unlock();
 }
 
-static void on_double_click(void *btn, void *usr)
+static void on_press_repeat_done(void *btn, void *usr)
 {
-    (void)btn; (void)usr;
+    (void)usr;
+    uint8_t count = iot_button_get_repeat((button_handle_t)btn);
+    if (count < 2) return;
     lvgl_port_lock(0);
-    ui_on_double_tap();
+    ui_on_tap_burst((int)count);
     lvgl_port_unlock();
 }
 
@@ -150,13 +157,13 @@ esp_err_t bsp_touch_init(void)
         TAG, "iot_button_create failed");
 
     ESP_RETURN_ON_ERROR(
-        iot_button_register_cb(btn_handle, BUTTON_SINGLE_CLICK,     NULL, on_single_click,     NULL),
-        TAG, "register single_click failed");
+        iot_button_register_cb(btn_handle, BUTTON_PRESS_DOWN,        NULL, on_press_down,        NULL),
+        TAG, "register press_down failed");
     ESP_RETURN_ON_ERROR(
-        iot_button_register_cb(btn_handle, BUTTON_DOUBLE_CLICK,     NULL, on_double_click,     NULL),
-        TAG, "register double_click failed");
+        iot_button_register_cb(btn_handle, BUTTON_PRESS_REPEAT_DONE, NULL, on_press_repeat_done, NULL),
+        TAG, "register press_repeat_done failed");
     ESP_RETURN_ON_ERROR(
-        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START, NULL, on_long_press_start, NULL),
+        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START,  NULL, on_long_press_start,  NULL),
         TAG, "register long_press_start failed");
 
     ESP_LOGI(TAG, "Touch button on CH%d (GPIO9) ready (short=%dms, long=%dms)",
