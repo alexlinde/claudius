@@ -1,93 +1,153 @@
 #include "ui.h"
 #include "font_ubuntu_medium.h"
 
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 
-static lv_obj_t *label_counter = NULL;
-static lv_obj_t *label_last_gesture = NULL;
-static int press_count = 0;
+/* ---------------------------------------------------------------------------
+ * Encoder-style input device fed by external gesture callbacks.
+ *
+ * Gesture sources (device iot_button / sim key events) push events via the
+ * ui_on_* functions; those only touch atomics, so they're safe from any task
+ * context. LVGL's timer handler invokes our read_cb on its own thread to
+ * drain those atomics into lv_indev_data_t.
+ * ------------------------------------------------------------------------- */
+static _Atomic int  s_enc_diff;
+static _Atomic bool s_enc_click_pending;   /* true -> next read should PRESS */
+static bool         s_enc_click_active;    /* true -> next read should RELEASE */
 
-static lv_font_t *font_title   = NULL;
-static lv_font_t *font_counter = NULL;
-static lv_font_t *font_footer  = NULL;
+static lv_indev_t *s_indev;
+static lv_group_t *s_group;
+static lv_obj_t   *s_slider;
+static lv_obj_t   *s_label_percent;
 
-static void update_counter_label(void)
+static lv_font_t  *s_font_title;
+static lv_font_t  *s_font_value;
+static lv_font_t  *s_font_footer;
+
+static ui_brightness_cb_t s_brightness_cb;
+
+#define UI_DEFAULT_BRIGHTNESS 50
+
+static void read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%d", press_count);
-    lv_label_set_text(label_counter, buf);
+    (void)indev;
+    data->enc_diff = atomic_exchange(&s_enc_diff, 0);
+
+    if (s_enc_click_active) {
+        /* Deliver the release half of a momentary click. */
+        data->state        = LV_INDEV_STATE_RELEASED;
+        s_enc_click_active = false;
+    } else if (atomic_exchange(&s_enc_click_pending, false)) {
+        /* Deliver the press; next tick the release finishes the click. */
+        data->state        = LV_INDEV_STATE_PRESSED;
+        s_enc_click_active = true;
+    } else {
+        data->state        = LV_INDEV_STATE_RELEASED;
+    }
 }
 
-static void set_last_gesture(const char *name)
+static void slider_value_changed_cb(lv_event_t *e)
 {
-    if (label_last_gesture) {
-        lv_label_set_text(label_last_gesture, name);
-    }
+    (void)e;
+    int v = (int)lv_slider_get_value(s_slider);
+    lv_label_set_text_fmt(s_label_percent, "%d%%", v);
+    if (s_brightness_cb) s_brightness_cb(v);
+}
+
+static void reset_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_slider_set_value(s_slider, UI_DEFAULT_BRIGHTNESS, LV_ANIM_ON);
+    /* set_value is silent; emit so our handler + any listeners react. */
+    lv_obj_send_event(s_slider, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void create_fonts(void)
 {
-    if (font_title) return;
-    font_title   = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 24);
-    font_counter = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 72);
-    font_footer  = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 14);
+    if (s_font_title) return;
+    s_font_title  = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 22);
+    s_font_value  = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 44);
+    s_font_footer = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 14);
 }
 
-void ui_init(lv_obj_t *parent)
+void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
 {
     create_fonts();
 
+    s_brightness_cb = brightness_cb;
+
     lv_obj_set_style_bg_color(parent, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(parent, 10, 0);
+    lv_obj_set_style_pad_row(parent, 8, 0);
 
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(parent,
+                          LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *label_hello = lv_label_create(parent);
-    lv_label_set_text(label_hello, "Tap Me");
-    lv_obj_set_style_text_font(label_hello, font_title, 0);
-    lv_obj_set_style_text_color(label_hello, lv_color_white(), 0);
+    /* Title ---------------------------------------------------------------- */
+    lv_obj_t *title = lv_label_create(parent);
+    lv_label_set_text(title, "Brightness");
+    lv_obj_set_style_text_font(title, s_font_title, 0);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
 
-    label_counter = lv_label_create(parent);
-    lv_obj_set_style_text_font(label_counter, font_counter, 0);
-    lv_obj_set_style_text_color(label_counter, lv_color_white(), 0);
-    update_counter_label();
+    /* Big percent readout -------------------------------------------------- */
+    s_label_percent = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_label_percent, s_font_value, 0);
+    lv_obj_set_style_text_color(s_label_percent, lv_color_white(), 0);
+    lv_label_set_text_fmt(s_label_percent, "%d%%", UI_DEFAULT_BRIGHTNESS);
 
-    label_last_gesture = lv_label_create(parent);
-    lv_obj_set_style_text_font(label_last_gesture, font_footer, 0);
-    lv_obj_set_style_text_color(label_last_gesture, lv_color_hex(0xAAAAAA), 0);
-    lv_label_set_text(label_last_gesture, "-");
+    /* Slider (focusable, editable) ---------------------------------------- */
+    s_slider = lv_slider_create(parent);
+    lv_obj_set_width(s_slider, 200);
+    lv_slider_set_range(s_slider, 0, 100);
+    lv_slider_set_value(s_slider, UI_DEFAULT_BRIGHTNESS, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_slider, slider_value_changed_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Reset button (focusable, clickable) --------------------------------- */
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_style_pad_hor(btn, 16, 0);
+    lv_obj_set_style_pad_ver(btn, 6,  0);
+    lv_obj_t *btn_label = lv_label_create(btn);
+    lv_label_set_text_fmt(btn_label, "Reset %d%%", UI_DEFAULT_BRIGHTNESS);
+    lv_obj_set_style_text_font(btn_label, s_font_footer, 0);
+    lv_obj_add_event_cb(btn, reset_clicked_cb, LV_EVENT_CLICKED, NULL);
+
+    /* Focus group + encoder indev. LVGL cycles NEXT/PREV on enc_diff, and
+     * an ENTER click toggles edit mode on editable widgets (slider) or
+     * fires CLICKED on non-editable focusable widgets (button). */
+    s_group = lv_group_create();
+    lv_group_add_obj(s_group, s_slider);
+    lv_group_add_obj(s_group, btn);
+    lv_group_set_default(s_group);
+
+    s_indev = lv_indev_create();
+    lv_indev_set_type(s_indev, LV_INDEV_TYPE_ENCODER);
+    lv_indev_set_read_cb(s_indev, read_cb);
+    lv_indev_set_group(s_indev, s_group);
+
+    /* Sync the backlight to the initial slider value. */
+    if (s_brightness_cb) s_brightness_cb((int)lv_slider_get_value(s_slider));
 }
 
 void ui_on_tap(void)
 {
-    press_count += 1;
-    update_counter_label();
-    set_last_gesture("tap");
+    atomic_fetch_add(&s_enc_diff, +1);
 }
 
 void ui_on_tap_burst(int count)
 {
-    /* Called after the trailing pause of a multi-tap burst. Each press-down
-     * in the burst has already applied +1 via ui_on_tap(), so here we only
-     * apply the extra bonus that distinguishes a double-tap from an N>=3
-     * burst, and update the label to reflect the final gesture kind. */
-    if (count < 2) return;
-
-    if (count == 2) {
-        press_count += 8; /* +1+1 from taps, +8 bonus -> +10 for a double */
-        update_counter_label();
-        set_last_gesture("double");
-    } else {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "burst x%d", count);
-        set_last_gesture(buf);
-    }
+    if (count == 2)       atomic_fetch_add(&s_enc_diff, -1);
+    else if (count == 3)  atomic_fetch_add(&s_enc_diff, +3);
+    else if (count >= 4)  atomic_fetch_add(&s_enc_diff, +1);
 }
 
 void ui_on_long_press(void)
 {
-    press_count = 0;
-    update_counter_label();
-    set_last_gesture("long (reset)");
+    atomic_store(&s_enc_click_pending, true);
 }
