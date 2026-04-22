@@ -38,12 +38,18 @@ ESP-IDF v6.0 firmware for the GeekMagic-S3 device (ESP32-S3, ST7789 240x240, cap
 │   └── idf_component.yml     # Component dependencies
 ├── components/
 │   └── ui/                   # Platform-agnostic LVGL UI (shared)
-│       ├── ui.c
-│       └── include/ui.h
+│       ├── ui.c              # Screen, encoder indev + focus group
+│       ├── include/ui.h
+│       ├── assets/
+│       │   └── Ubuntu-Medium.ttf
+│       ├── embed_binary.py   # Build-time TTF -> C array codegen
+│       └── include/font_ubuntu_medium.h
 └── sim/                      # macOS SDL2 simulator
     ├── CMakeLists.txt
     └── main_sim.c
 ```
+
+The UI also uses `lv_tiny_ttf` to render labels at runtime-chosen point sizes from an embedded TTF; the CMake build codegen's the font into a C array so both firmware and simulator link against the same glyph data.
 
 ## Building the firmware
 
@@ -80,15 +86,23 @@ cmake --build sim/build -j
 ./sim/build/gm_s3_sim
 ```
 
-Simulator keys (mirror the touch‑button gestures on GPIO9):
+Only `SPACE` is wired in the sim - it simulates the capacitive touch button with the same timing-based state machine `main/bsp_touch.c` builds on top of `espressif/button` (`short_press_time = 180 ms`, `long_press_time = 800 ms`). Rapid presses form a burst; hold past 800 ms for a long press.
 
-| Key     | Gesture      | Effect                |
-|---------|--------------|-----------------------|
-| `SPACE` | single tap   | counter +1            |
-| `D`     | double tap   | counter +10           |
-| `L`     | long press   | counter reset to 0    |
+## UI and gesture model
 
-On device, the same gestures are produced by the `espressif/button` state machine driven by the capacitive touch pad (`short_press_time = 180 ms`, `long_press_time = 800 ms`; see `main/bsp_touch.c`).
+The UI is driven by the standard LVGL single-button idiom: an `LV_INDEV_TYPE_ENCODER` input device feeding an `lv_group_t` of focusable widgets. Gestures push lock-free atomic events that the indev's `read_cb` drains, so gesture sources (device `iot_button` callbacks, simulator key events) never need to hold the LVGL port lock.
+
+Gesture recognition settles single- and double-taps only after the trailing pause (no label flicker through intermediate states); a 3rd tap reclassifies the burst live and every further tap lands immediately.
+
+| Gesture      | Navigation mode              | Edit mode (focused slider)       |
+|--------------|------------------------------|----------------------------------|
+| Tap          | focus next (`LV_KEY_NEXT`)   | value +1                         |
+| Double tap   | focus prev (`LV_KEY_PREV`)   | value -1                         |
+| Burst x3     | -                            | value +3 (catches up held taps)  |
+| Burst xN (N>=4) | -                         | value +1 per tap (live scrub)    |
+| Long press   | enter edit (slider) / click (button) | exit edit                |
+
+The default screen is a brightness demo: title, big percent readout, slider (0-100), and a "Reset 50%" button. The slider's `VALUE_CHANGED` handler calls the `ui_brightness_cb_t` passed into `ui_init`, so the UI component has no dependency on the BSP. `main.c` wires that callback to `bsp_display_set_backlight_percent()`; the simulator plugs in a stub that just prints the new value.
 
 ## Shared UI
 
@@ -110,9 +124,11 @@ The display must be driven on **SPI3_HOST** (not SPI2_HOST). SPI2_HOST fails sil
 
 The display has no chip-select pin (CS is hardwired or not connected). Pass `.cs_gpio_num = -1` to the panel IO config.
 
-### Display: backlight is active-LOW
+### Display: backlight is active-LOW (hidden from callers)
 
-GPIO14 drives the backlight with inverted logic: LOW = on, HIGH = off. The LEDC PWM duty of 0 gives full brightness.
+GPIO14 drives the backlight with inverted logic (LOW = on, HIGH = off). We handle this at the peripheral with the LEDC channel's `flags.output_invert = 1`, so duty maps forward everywhere in code: 0 = off, max = full. The timer is configured at 10-bit resolution (1024 steps) for smooth low-end dimming.
+
+The BSP stays policy-free: `bsp_display_init()` leaves the backlight off (LEDC `duty = 0`) and the application decides when to turn it on via `bsp_display_set_backlight_percent(0..100)`. Today `ui_init()` syncs the backlight to the slider's default (50%) at the end of its build; there is a brief flash of power-on VRAM before the first LVGL flush lands on the panel, documented in `main.c`.
 
 ### Touch: calibration scan is mandatory
 
@@ -125,6 +141,6 @@ The ESP-IDF v6.0 `touch_sens` driver requires an initial calibration scan before
 5. Set `active_thresh = benchmark * 0.02` (2% of benchmark)
 6. Reconfig the channel, register callbacks, enable, start continuous scanning
 
-### Touch: ISR callback context
+### Touch: bridging to `iot_button` via a custom driver
 
-The `on_active` callback runs in ISR context. You cannot call LVGL functions directly from it. Use `vTaskNotifyGiveFromISR` to wake a dedicated task that acquires the LVGL mutex before updating the UI.
+The ESP-IDF `touch_sens` callbacks (`on_active` / `on_inactive`) fire from the driver's own task and shouldn't do anything heavy. We just update an `_Atomic bool` with the current press state, then hand that to `iot_button` through a `button_driver_t` whose `get_key_level` reads that atomic. `iot_button` then runs its own state machine for single/double clicks, repeat counts, long-press, etc., and dispatches higher-level callbacks that push events into the UI's indev queue. This keeps all timing logic in one well-tested component instead of hand-rolled debouncing.

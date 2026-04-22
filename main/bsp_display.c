@@ -129,9 +129,9 @@ esp_err_t bsp_display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "Panel init failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(panel, true), TAG, "Invert failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), TAG, "Disp on failed");
-
-    ESP_LOGI(TAG, "Backlight on (50%%)...");
-    ESP_RETURN_ON_ERROR(bsp_display_set_backlight_percent(50), TAG, "Backlight on failed");
+    /* Backlight stays off (LEDC channel was configured with duty=0); the app
+     * is expected to call bsp_display_set_backlight_percent() once its first
+     * frame is on the panel so the user never sees uninitialised VRAM. */
 
     ESP_LOGI(TAG, "LVGL port init...");
     const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();

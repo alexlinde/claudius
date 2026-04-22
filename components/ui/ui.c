@@ -28,7 +28,7 @@ static lv_font_t  *s_font_footer;
 
 static ui_brightness_cb_t s_brightness_cb;
 
-#define UI_DEFAULT_BRIGHTNESS 50
+#define UI_DEFAULT_BRIGHTNESS 20
 
 static void read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -131,7 +131,11 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_indev_set_read_cb(s_indev, read_cb);
     lv_indev_set_group(s_indev, s_group);
 
-    /* Sync the backlight to the initial slider value. */
+    /* Sync backlight to the initial slider value. This runs under the LVGL
+     * port lock, so we can't force a synchronous flush here (would deadlock
+     * against the esp_lvgl_port task) - the first real frame lands on the
+     * panel within a tick of releasing the lock, and the brief moment
+     * between backlight-on and first-flush is not visible in practice. */
     if (s_brightness_cb) s_brightness_cb((int)lv_slider_get_value(s_slider));
 }
 

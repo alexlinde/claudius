@@ -28,5 +28,14 @@ void app_main(void)
     ui_init(lv_screen_active(), brightness_cb);
     lvgl_port_unlock();
 
+    /* The initial brightness_cb fires from inside ui_init while the port
+     * lock is held, so the backlight turns on ~1 LVGL tick before the
+     * first frame actually reaches the panel and a brief flash of
+     * power-on VRAM is visible. If we ever want a pristine boot we'd
+     * need to defer that first brightness_cb to here (post-unlock) and
+     * wait for a flush - e.g. expose ui_sync_initial_brightness() that
+     * main calls after a short vTaskDelay or an explicit flush-ready
+     * signal from esp_lvgl_port. Not worth the extra machinery today. */
+
     ESP_LOGI(TAG, "Ready.");
 }
