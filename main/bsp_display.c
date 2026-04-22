@@ -27,38 +27,55 @@
 #define BSP_LCD_PARAM_BITS   8
 #define BSP_LCD_SPI_MODE     3
 
-/* Backlight is active-LOW: duty 255 = off, duty 0 = full brightness */
-#define BSP_BL_DUTY_ON       0
+/* Backlight PWM. 10-bit resolution (1024 steps) for smooth low-end dimming;
+ * the panel's backlight net is active-LOW, but we invert at the LEDC output
+ * (flags.output_invert) so duty maps forward: 0 = off, max = full. */
+#define BSP_BL_LEDC_MODE     LEDC_LOW_SPEED_MODE
+#define BSP_BL_LEDC_TIMER    LEDC_TIMER_0
+#define BSP_BL_LEDC_CHANNEL  LEDC_CHANNEL_0
+#define BSP_BL_LEDC_RES      LEDC_TIMER_10_BIT
+#define BSP_BL_DUTY_MAX      ((1u << 10) - 1u)  /* 1023 */
+#define BSP_BL_FREQ_HZ       5000
 
 static const char *TAG = "bsp_display";
 
 static esp_err_t bsp_backlight_init(void)
 {
     ledc_timer_config_t timer_cfg = {
-        .speed_mode      = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num       = LEDC_TIMER_0,
-        .freq_hz         = 5000,
+        .speed_mode      = BSP_BL_LEDC_MODE,
+        .duty_resolution = BSP_BL_LEDC_RES,
+        .timer_num       = BSP_BL_LEDC_TIMER,
+        .freq_hz         = BSP_BL_FREQ_HZ,
         .clk_cfg         = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_cfg), TAG, "LEDC timer config failed");
 
     ledc_channel_config_t ch_cfg = {
         .gpio_num   = BSP_LCD_BL,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel    = LEDC_CHANNEL_0,
-        .timer_sel  = LEDC_TIMER_0,
-        .duty       = 255,
+        .speed_mode = BSP_BL_LEDC_MODE,
+        .channel    = BSP_BL_LEDC_CHANNEL,
+        .timer_sel  = BSP_BL_LEDC_TIMER,
+        .duty       = 0,                 /* start off until panel is ready */
         .hpoint     = 0,
+        .flags      = { .output_invert = 1 },
     };
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "LEDC channel config failed");
     return ESP_OK;
 }
 
-static esp_err_t bsp_backlight_set(uint8_t duty)
+esp_err_t bsp_display_set_backlight_percent(int percent)
 {
-    ESP_RETURN_ON_ERROR(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty), TAG, "Set duty failed");
-    ESP_RETURN_ON_ERROR(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0), TAG, "Update duty failed");
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+
+    /* Forward map (thanks to output_invert above): 0% -> 0, 100% -> DUTY_MAX. */
+    uint32_t duty = ((uint32_t)percent * BSP_BL_DUTY_MAX + 50) / 100;
+    ESP_RETURN_ON_ERROR(
+        ledc_set_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, duty),
+        TAG, "Set duty failed");
+    ESP_RETURN_ON_ERROR(
+        ledc_update_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL),
+        TAG, "Update duty failed");
     return ESP_OK;
 }
 
@@ -113,8 +130,8 @@ esp_err_t bsp_display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(panel, true), TAG, "Invert failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), TAG, "Disp on failed");
 
-    ESP_LOGI(TAG, "Backlight on...");
-    ESP_RETURN_ON_ERROR(bsp_backlight_set(BSP_BL_DUTY_ON), TAG, "Backlight on failed");
+    ESP_LOGI(TAG, "Backlight on (50%%)...");
+    ESP_RETURN_ON_ERROR(bsp_display_set_backlight_percent(50), TAG, "Backlight on failed");
 
     ESP_LOGI(TAG, "LVGL port init...");
     const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
