@@ -80,7 +80,15 @@ cmake --build sim/build -j
 ./sim/build/gm_s3_sim
 ```
 
-Press **SPACE** in the simulator window to simulate a touch button press on GPIO9.
+Simulator keys (mirror the touch‑button gestures on GPIO9):
+
+| Key     | Gesture      | Effect                |
+|---------|--------------|-----------------------|
+| `SPACE` | single tap   | counter +1            |
+| `D`     | double tap   | counter +10           |
+| `L`     | long press   | counter reset to 0    |
+
+On device, the same gestures are produced by the `espressif/button` state machine driven by the capacitive touch pad (`short_press_time = 180 ms`, `long_press_time = 800 ms`; see `main/bsp_touch.c`).
 
 ## Shared UI
 
