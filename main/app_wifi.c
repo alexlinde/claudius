@@ -3,8 +3,11 @@
 #include "app_dbg.h"
 
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -18,6 +21,34 @@ static EventGroupHandle_t s_wifi_events;
 static app_wifi_mode_t s_mode = APP_WIFI_MODE_AP;
 static esp_netif_t *s_netif;
 static int s_retry;
+static bool s_sntp_started;
+
+static void on_time_sync(struct timeval *tv)
+{
+    (void)tv;
+    time_t now = time(NULL);
+    struct tm t;
+    gmtime_r(&now, &t);
+    app_dbg_log("sntp: synced %04d-%02d-%02d %02d:%02d:%02dZ",
+                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                t.tm_hour, t.tm_min, t.tm_sec);
+}
+
+static void start_sntp(void)
+{
+    if (s_sntp_started) return;
+    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    cfg.wait_for_sync = false;
+    cfg.sync_cb = on_time_sync;
+    esp_err_t err = esp_netif_sntp_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SNTP init failed: %s", esp_err_to_name(err));
+        app_dbg_log("sntp: init failed");
+        return;
+    }
+    s_sntp_started = true;
+    app_dbg_log("sntp: started");
+}
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -93,6 +124,7 @@ static bool try_sta(void)
             s_mode = APP_WIFI_MODE_STA;
             /* Disable modem sleep for responsive push updates. */
             esp_wifi_set_ps(WIFI_PS_NONE);
+            start_sntp();
             return true;
         }
 

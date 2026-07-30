@@ -26,7 +26,7 @@ shows usage bars plus WORKING / WAITING / IDLE on the 240×240 display.
 Claude Code
         │ hooks
         ▼
-gm-claude.py companion (:8765, mDNS _claudius._tcp)
+claudius.py companion (:8765, mDNS _claudius._tcp)
         │ WebSocket push
         ▼
 GeekMagic-S3 firmware (claudius)
@@ -42,9 +42,9 @@ cd companion
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python3 gm-claude.py --name my-laptop
+python3 claudius.py --name my-laptop
 # optional shared secret (must match the screen config):
-python3 gm-claude.py --name my-laptop --secret mypassword
+python3 claudius.py --name my-laptop --secret mypassword
 ```
 
 It installs Claude Code hooks into `~/.claude/settings.json`, advertises
@@ -52,7 +52,7 @@ It installs Claude Code hooks into `~/.claude/settings.json`, advertises
 bars to the GeekMagic-S3. Remove hooks with:
 
 ```bash
-python3 gm-claude.py --uninstall
+python3 claudius.py --uninstall
 ```
 
 ## Building the firmware
@@ -126,7 +126,7 @@ curl -F "firmware=@build/gm_s3.bin" http://<device-name>.local/api/ota
 ```
 ├── main/                 # BSP, WiFi, mDNS, WebSocket, config HTTP, OTA
 ├── components/ui/        # Shared LVGL status dashboard (+ simulator)
-├── companion/            # Claude-only status daemon (gm-claude.py)
+├── companion/            # Claude-only status daemon (claudius.py)
 ├── sim/                  # macOS SDL2 simulator
 ├── partitions.csv        # 16 MB: factory + 2× OTA + storage
 └── lv_conf.h             # Shared LVGL config

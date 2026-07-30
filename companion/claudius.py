@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gm-claude.py — minimal Claude Code companion for the GeekMagic-S3 screen.
+claudius.py — minimal Claude Code companion for the GeekMagic-S3 screen.
 
 Talks the same WebSocket protocol as henrikekblad/codelight's screen client:
   mDNS `_claudius._tcp` → ws://host:8765 → challenge/HMAC → subscribe →
@@ -10,9 +10,9 @@ Claude-only. No remote control, multi-agent, D-Bus, or conversation feed.
 
 Usage:
     pip install websockets zeroconf
-    python3 companion/gm-claude.py --name my-laptop
-    python3 companion/gm-claude.py --name my-laptop --secret mypassword
-    python3 companion/gm-claude.py --uninstall
+    python3 companion/claudius.py --name my-laptop
+    python3 companion/claudius.py --name my-laptop --secret mypassword
+    python3 companion/claudius.py --uninstall
 """
 
 from __future__ import annotations
@@ -665,7 +665,8 @@ def hook_cmd(state: str) -> str:
 
 
 def is_ours(cmd: str) -> bool:
-    return "gm-claude" in cmd and "--hook" in cmd
+    # Match current and pre-rename script names in Claude settings hooks.
+    return "--hook" in cmd and ("claudius" in cmd or "gm-claude" in cmd)
 
 
 def _strip_our_hooks(hooks: dict) -> None:
