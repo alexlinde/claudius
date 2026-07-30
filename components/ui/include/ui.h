@@ -46,6 +46,10 @@ void ui_on_tap(void);
 void ui_on_tap_burst(int count);
 void ui_on_long_press(void);
 
+/* Hold-to-factory-reset progress. 0 hides the overlay; 1..99 fills the bar;
+ * 100 shows "Resetting…". Safe to call from any task. */
+void ui_set_reset_progress(int percent);
+
 /* Preferred brightness percent (1..100). Sleep dims separately and restores
  * this level on wake. Safe to call from any task. */
 int ui_get_brightness(void);

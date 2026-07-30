@@ -12,8 +12,10 @@
 #define VER_RES 240
 
 /* Must match main/bsp_touch.c so the sim behaves like the device. */
-#define TAP_SHORT_PRESS_MS  180
-#define TAP_LONG_PRESS_MS   800
+#define TAP_SHORT_PRESS_MS     180
+#define TAP_LONG_PRESS_MS      800
+#define TAP_RESET_SHOW_MS     2000
+#define TAP_FACTORY_RESET_MS  5000
 
 static int s_last_brightness = -1;
 static void sim_brightness_cb(int percent)
@@ -139,6 +141,7 @@ int main(void)
 
     printf("gm-s3 simulator — claudius status UI\n");
     printf("  SPACE = touch pad (tap cycles sessions / double = prev)\n");
+    printf("         hold 2s+ for reset progress, 5s factory reset\n");
     printf("  1     = working + 3 sessions\n");
     printf("  2     = waitingFor permission prompt\n");
     printf("  3     = interactive + done\n");
@@ -153,6 +156,8 @@ int main(void)
     int      burst_count      = 0;
     bool     burst_committed  = false;
     bool     long_press_fired = false;
+    bool     reset_fired      = false;
+    int      last_reset_pct   = 0;
     bool     key_prev[SDL_NUM_SCANCODES] = {0};
 
     for (;;) {
@@ -166,6 +171,8 @@ int main(void)
         if (space_now && !space_prev) {
             space_down_ms    = now;
             long_press_fired = false;
+            reset_fired      = false;
+            last_reset_pct   = 0;
             burst_count++;
             if (burst_count >= 3) {
                 ui_on_tap_burst(burst_count);
@@ -175,6 +182,10 @@ int main(void)
             if (!long_press_fired) {
                 last_release_ms = now;
             }
+            if (!reset_fired) {
+                ui_set_reset_progress(0);
+                last_reset_pct = 0;
+            }
         }
 
         if (space_now && !long_press_fired &&
@@ -183,6 +194,24 @@ int main(void)
             long_press_fired = true;
             burst_count      = 0;
             burst_committed  = false;
+        }
+
+        if (space_now && long_press_fired && !reset_fired) {
+            uint32_t held = now - space_down_ms;
+            if (held >= TAP_FACTORY_RESET_MS) {
+                ui_set_reset_progress(100);
+                reset_fired = true;
+                printf("[sim] factory reset would clear config & reboot\n");
+            } else if (held >= TAP_RESET_SHOW_MS) {
+                int pct = (int)((held - TAP_RESET_SHOW_MS) * 100 /
+                                (TAP_FACTORY_RESET_MS - TAP_RESET_SHOW_MS));
+                if (pct < 1) pct = 1;
+                if (pct > 99) pct = 99;
+                if (pct != last_reset_pct) {
+                    ui_set_reset_progress(pct);
+                    last_reset_pct = pct;
+                }
+            }
         }
 
         if (!space_now && burst_count > 0 &&

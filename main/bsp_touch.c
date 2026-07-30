@@ -7,8 +7,14 @@
 #include "driver/touch_sens.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "iot_button.h"
 #include "button_types.h"
+
+#include "app_config.h"
+#include "app_dbg.h"
 #include "ui.h"
 
 #define TOUCH_CHAN_ID           9
@@ -19,11 +25,14 @@
  * within a multi-tap burst. Single- and double-tap commit only after the
  * trailing pause (no intermediate flicker); a 3rd tap reclassifies the burst
  * live via BUTTON_PRESS_REPEAT and each subsequent tap updates immediately. */
-#define BTN_SHORT_PRESS_MS     180
-#define BTN_LONG_PRESS_MS      800
+#define BTN_SHORT_PRESS_MS      180
+#define BTN_LONG_PRESS_MS       800   /* wake from screensaver */
+#define BTN_RESET_SHOW_MS      2000   /* start showing hold-to-reset UI */
+#define BTN_FACTORY_RESET_MS   5000   /* commit factory reset */
 
 static const char *TAG = "bsp_touch";
 static _Atomic bool s_pressed;
+static _Atomic bool s_reset_armed;
 
 static bool on_touch_active(touch_sensor_handle_t sens_handle,
                             const touch_active_event_data_t *event,
@@ -83,6 +92,55 @@ static void on_long_press_start(void *btn, void *usr)
 {
     (void)btn; (void)usr;
     ui_on_long_press();
+}
+
+static void on_long_press_hold(void *btn, void *usr)
+{
+    (void)usr;
+    if (atomic_load(&s_reset_armed)) return;
+
+    uint32_t ms = iot_button_get_pressed_time((button_handle_t)btn);
+    if (ms < BTN_RESET_SHOW_MS) {
+        ui_set_reset_progress(0);
+        return;
+    }
+    if (ms >= BTN_FACTORY_RESET_MS) return;
+
+    int pct = (int)((ms - BTN_RESET_SHOW_MS) * 100 /
+                    (BTN_FACTORY_RESET_MS - BTN_RESET_SHOW_MS));
+    if (pct < 1) pct = 1;
+    if (pct > 99) pct = 99;
+    ui_set_reset_progress(pct);
+}
+
+static void factory_reset_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(900));
+    app_config_factory_reset();
+    app_dbg_log("factory reset: rebooting to setup");
+    esp_restart();
+}
+
+static void on_factory_reset(void *btn, void *usr)
+{
+    (void)btn; (void)usr;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&s_reset_armed, &expected, true)) {
+        return;
+    }
+    ESP_LOGW(TAG, "Factory reset triggered (5s hold)");
+    app_dbg_log("factory reset: hold complete");
+    ui_set_reset_progress(100);
+    xTaskCreate(factory_reset_task, "factory_rst", 4096, NULL, 5, NULL);
+}
+
+static void on_press_up(void *btn, void *usr)
+{
+    (void)btn; (void)usr;
+    if (!atomic_load(&s_reset_armed)) {
+        ui_set_reset_progress(0);
+    }
 }
 
 esp_err_t bsp_touch_init(void)
@@ -157,6 +215,13 @@ esp_err_t bsp_touch_init(void)
         iot_button_create(&btn_cfg, &s_touch_btn_driver, &btn_handle),
         TAG, "iot_button_create failed");
 
+    button_event_args_t wake_args = {
+        .long_press = { .press_time = BTN_LONG_PRESS_MS },
+    };
+    button_event_args_t reset_args = {
+        .long_press = { .press_time = BTN_FACTORY_RESET_MS },
+    };
+
     ESP_RETURN_ON_ERROR(
         iot_button_register_cb(btn_handle, BUTTON_SINGLE_CLICK,     NULL, on_single_click,     NULL),
         TAG, "register single_click failed");
@@ -167,10 +232,19 @@ esp_err_t bsp_touch_init(void)
         iot_button_register_cb(btn_handle, BUTTON_PRESS_REPEAT,     NULL, on_press_repeat,     NULL),
         TAG, "register press_repeat failed");
     ESP_RETURN_ON_ERROR(
-        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START, NULL, on_long_press_start, NULL),
+        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START, &wake_args, on_long_press_start, NULL),
         TAG, "register long_press_start failed");
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_START, &reset_args, on_factory_reset, NULL),
+        TAG, "register factory_reset failed");
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_LONG_PRESS_HOLD,  NULL, on_long_press_hold,  NULL),
+        TAG, "register long_press_hold failed");
+    ESP_RETURN_ON_ERROR(
+        iot_button_register_cb(btn_handle, BUTTON_PRESS_UP,         NULL, on_press_up,         NULL),
+        TAG, "register press_up failed");
 
-    ESP_LOGI(TAG, "Touch button on CH%d (GPIO9) ready (short=%dms, long=%dms)",
-             TOUCH_CHAN_ID, BTN_SHORT_PRESS_MS, BTN_LONG_PRESS_MS);
+    ESP_LOGI(TAG, "Touch button on CH%d (GPIO9) ready (short=%dms, long=%dms, reset=%dms)",
+             TOUCH_CHAN_ID, BTN_SHORT_PRESS_MS, BTN_LONG_PRESS_MS, BTN_FACTORY_RESET_MS);
     return ESP_OK;
 }

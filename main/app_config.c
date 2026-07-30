@@ -129,3 +129,21 @@ esp_err_t app_config_save(void)
     ESP_LOGI(TAG, "Config saved");
     return err;
 }
+
+static void erase_namespace(const char *ns)
+{
+    nvs_handle_t h;
+    if (nvs_open(ns, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+esp_err_t app_config_factory_reset(void)
+{
+    erase_namespace(NVS_NS);
+    erase_namespace(NVS_NS_LEGACY);
+    app_config_set_defaults();
+    ESP_LOGW(TAG, "Factory reset — config cleared");
+    return ESP_OK;
+}

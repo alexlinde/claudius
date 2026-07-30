@@ -96,6 +96,10 @@ AP and shows setup mode on screen:
 
 Afterwards the config page is also at `http://<device-name>.local/`.
 
+To reconfigure after moving networks, hold the touch button for **5 seconds**
+until the reset bar completes — the device clears saved Wi-Fi/settings and
+reboots into setup mode.
+
 ## Building the simulator (macOS)
 
 Iterate on the status UI without flashing:
@@ -112,6 +116,7 @@ cmake --build sim/build -j
 | Key   | Action                          |
 |-------|---------------------------------|
 | SPACE | Touch pad (tap cycles sessions) |
+|       | Hold 2s+ reset progress / 5s reset |
 | 1/2/3 | Mock working / waiting / idle   |
 | 0     | Mock OFFLINE                    |
 | 4     | Mock AUTH FAIL                  |
@@ -119,11 +124,12 @@ cmake --build sim/build -j
 
 ## UI and gestures
 
-| Gesture    | Effect                                      |
-|------------|---------------------------------------------|
-| Tap        | Wake from screensaver, else next session    |
-| Double tap | Previous session                            |
-| Long press | Wake from screensaver                       |
+| Gesture         | Effect                                      |
+|-----------------|---------------------------------------------|
+| Tap             | Wake from screensaver, else next session    |
+| Double tap      | Previous session                            |
+| Long press (~0.8s) | Wake from screensaver                    |
+| Hold 5s         | Factory reset → setup AP (`claudius-setup`) |
 
 Screensaver starts after 10 minutes without a companion (if enabled) or after
 1 hour without active sessions. Active (`working` / `blocked` / `busy` /

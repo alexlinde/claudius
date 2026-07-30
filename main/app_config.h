@@ -37,6 +37,9 @@ extern app_config_t g_cfg;
 void app_config_set_defaults(void);
 esp_err_t app_config_load(void);
 esp_err_t app_config_save(void);
+/* Erase persisted config (WiFi, companion, etc.) and restore RAM defaults.
+ * Caller should reboot so the device re-enters setup AP mode. */
+esp_err_t app_config_factory_reset(void);
 
 #ifdef __cplusplus
 }

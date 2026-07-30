@@ -103,6 +103,13 @@ static float s_spr_vy[MAX_SLEEP_SPRITES];
 static int s_spr_count;
 static bool s_spr_is_clock[MAX_SLEEP_SPRITES];
 
+/* Factory-reset hold overlay (drawn above sleep) */
+static lv_obj_t *s_reset_layer;
+static lv_obj_t *s_reset_title;
+static lv_obj_t *s_reset_hint;
+static lv_obj_t *s_reset_bar;
+static int s_reset_pct;
+
 static void apply_brightness(int percent)
 {
     if (percent < 0) percent = 0;
@@ -603,6 +610,41 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_obj_remove_flag(s_sleep_layer, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
 
+    /* Factory-reset hold overlay (hidden; above sleep) */
+    s_reset_layer = lv_obj_create(parent);
+    lv_obj_set_size(s_reset_layer, 240, 240);
+    lv_obj_set_pos(s_reset_layer, 0, 0);
+    lv_obj_set_style_bg_color(s_reset_layer, rgb(COL_BG), 0);
+    lv_obj_set_style_bg_opa(s_reset_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_reset_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_reset_layer, 0, 0);
+    lv_obj_remove_flag(s_reset_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_reset_layer, LV_OBJ_FLAG_HIDDEN);
+
+    s_reset_title = make_label(s_reset_layer, s_font_value, rgb(COL_TITLE));
+    lv_obj_set_width(s_reset_title, 220);
+    lv_obj_set_style_text_align(s_reset_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_reset_title, "Hold to reset");
+    lv_obj_align(s_reset_title, LV_ALIGN_CENTER, 0, -36);
+
+    s_reset_hint = make_label(s_reset_layer, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_width(s_reset_hint, 220);
+    lv_obj_set_style_text_align(s_reset_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_reset_hint, "Clears Wi-Fi & settings");
+    lv_obj_align(s_reset_hint, LV_ALIGN_CENTER, 0, -8);
+
+    s_reset_bar = lv_bar_create(s_reset_layer);
+    lv_obj_set_size(s_reset_bar, 180, 14);
+    lv_bar_set_range(s_reset_bar, 0, 100);
+    lv_obj_set_style_bg_color(s_reset_bar, rgb(COL_BAR_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_reset_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_reset_bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_reset_bar, rgb(COL_ORANGE), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s_reset_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_reset_bar, 2, LV_PART_INDICATOR);
+    lv_obj_align(s_reset_bar, LV_ALIGN_CENTER, 0, 28);
+    s_reset_pct = 0;
+
     s_group = lv_group_create();
     lv_group_set_default(s_group);
     s_indev = lv_indev_create();
@@ -757,6 +799,42 @@ void ui_on_long_press(void)
         return;
     }
     /* Reserved — no settings UI yet. */
+}
+
+void ui_set_reset_progress(int percent)
+{
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    lock_ui();
+    if (percent == 0) {
+        if (s_reset_pct != 0) {
+            lv_obj_add_flag(s_reset_layer, LV_OBJ_FLAG_HIDDEN);
+            s_reset_pct = 0;
+        }
+        unlock_ui();
+        return;
+    }
+
+    if (s_sleeping) {
+        /* Show reset UI above sleep; restore backlight without tearing down sleep. */
+        apply_brightness(s_user_brightness);
+    }
+
+    if (percent != s_reset_pct) {
+        if (percent >= 100) {
+            lv_label_set_text(s_reset_title, "Resetting…");
+            lv_label_set_text(s_reset_hint, "Rebooting to setup");
+            lv_bar_set_value(s_reset_bar, 100, LV_ANIM_OFF);
+        } else {
+            lv_label_set_text(s_reset_title, "Hold to reset");
+            lv_label_set_text(s_reset_hint, "Clears Wi-Fi & settings");
+            lv_bar_set_value(s_reset_bar, percent, LV_ANIM_OFF);
+        }
+        lv_obj_remove_flag(s_reset_layer, LV_OBJ_FLAG_HIDDEN);
+        s_reset_pct = percent;
+    }
+    unlock_ui();
 }
 
 int ui_get_brightness(void)
