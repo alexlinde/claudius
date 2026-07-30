@@ -62,6 +62,7 @@ static int s_user_brightness = UI_DEFAULT_BRIGHTNESS; /* preferred level (not sl
 static int s_brightness = UI_DEFAULT_BRIGHTNESS;      /* currently applied */
 
 static status_snapshot_t s_snap;
+static int s_session_idx;
 static bool s_sleeping;
 static long s_utc_offset;
 static uint32_t s_last_clock_sec = UINT32_MAX;
@@ -82,10 +83,12 @@ static lv_obj_t *s_s_label;
 static lv_obj_t *s_s_reset;
 static lv_obj_t *s_s_bar;
 static lv_obj_t *s_s_pct;
-static lv_obj_t *s_sessions;
+static lv_obj_t *s_sessions_count;
+static lv_obj_t *s_sessions_name;
 static lv_obj_t *s_divider;
 static lv_obj_t *s_status_box;
-static lv_obj_t *s_status_label;
+static lv_obj_t *s_status_state;
+static lv_obj_t *s_status_waiting;
 
 /* Sleep overlay */
 static lv_obj_t *s_sleep_layer;
@@ -232,54 +235,151 @@ static void update_meter(bool weekly, const char *title, float pct, const char *
     lv_label_set_text_fmt(pct_l, "%d%%", v);
 }
 
+static void upper_copy(char *dst, size_t dst_len, const char *src)
+{
+    size_t i = 0;
+    if (!src) src = "";
+    for (; src[i] && i + 1 < dst_len; i++) {
+        char c = src[i];
+        dst[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+    dst[i] = '\0';
+}
+
+static uint32_t color_for_session(const agent_session_t *s)
+{
+    if (!s) return COL_GREEN;
+    if (s->waiting_for[0] ||
+        strcmp(s->status, "waiting") == 0 ||
+        strcmp(s->state, "blocked") == 0) {
+        return COL_RED;
+    }
+    if (strcmp(s->state, "working") == 0 || strcmp(s->status, "busy") == 0) {
+        return COL_ORANGE;
+    }
+    if (strcmp(s->state, "failed") == 0) return COL_RED;
+    if (strcmp(s->state, "done") == 0 || strcmp(s->state, "stopped") == 0) {
+        return COL_OFFLINE;
+    }
+    return COL_GREEN;
+}
+
+/* Prefer exact CLI fields: state, else live status, else kind. */
+static void session_primary_label(const agent_session_t *s, char *out, size_t out_len)
+{
+    if (!s) {
+        snprintf(out, out_len, "IDLE");
+        return;
+    }
+    if (s->state[0]) {
+        upper_copy(out, out_len, s->state);
+        return;
+    }
+    if (s->status[0]) {
+        upper_copy(out, out_len, s->status);
+        return;
+    }
+    if (s->kind[0]) {
+        upper_copy(out, out_len, s->kind);
+        return;
+    }
+    snprintf(out, out_len, "—");
+}
+
+static const agent_session_t *selected_session(void)
+{
+    if (s_snap.session_count <= 0) return NULL;
+    if (s_session_idx < 0) s_session_idx = 0;
+    if (s_session_idx >= s_snap.session_count) {
+        s_session_idx = s_snap.session_count - 1;
+    }
+    return &s_snap.sessions[s_session_idx];
+}
+
+static void clamp_session_idx(void)
+{
+    if (s_snap.session_count <= 0) {
+        s_session_idx = 0;
+        return;
+    }
+    if (s_session_idx < 0) s_session_idx = 0;
+    if (s_session_idx >= s_snap.session_count) {
+        s_session_idx = s_snap.session_count - 1;
+    }
+}
+
+static void cycle_session(int delta)
+{
+    if (s_snap.session_count <= 0) {
+        s_session_idx = 0;
+        return;
+    }
+    int n = s_snap.session_count;
+    s_session_idx = (s_session_idx + delta) % n;
+    if (s_session_idx < 0) s_session_idx += n;
+}
+
 static void update_status_box(void)
 {
     uint32_t color;
-    char label[64];
+    char state_buf[SESSION_STATE_LEN];
 
     if (s_snap.auth_failed) {
         color = COL_RED;
-        snprintf(label, sizeof(label), "AUTH FAIL");
+        lv_label_set_text(s_status_state, "AUTH FAIL");
+        lv_label_set_text(s_status_waiting, "");
     } else if (!s_snap.connected) {
         color = COL_OFFLINE;
-        snprintf(label, sizeof(label), "OFFLINE");
+        lv_label_set_text(s_status_state, "OFFLINE");
+        lv_label_set_text(s_status_waiting, "");
+    } else if (s_snap.session_count <= 0) {
+        color = COL_GREEN;
+        lv_label_set_text(s_status_state, "IDLE");
+        lv_label_set_text(s_status_waiting, "no sessions");
     } else {
-        const char *state;
-        switch (s_snap.status) {
-        case AGENT_STATUS_WORKING: state = "WORKING"; color = COL_ORANGE; break;
-        case AGENT_STATUS_WAITING: state = "WAITING"; color = COL_RED; break;
-        case AGENT_STATUS_IDLE:    state = "IDLE";    color = COL_GREEN; break;
-        default:                   state = "OFFLINE"; color = COL_OFFLINE; break;
-        }
-        if (s_snap.agent_display[0]) {
-            /* Uppercase agent name + state */
-            char agent[STATUS_AGENT_LEN];
-            size_t i;
-            for (i = 0; s_snap.agent_display[i] && i + 1 < sizeof(agent); i++) {
-                char c = s_snap.agent_display[i];
-                agent[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
-            }
-            agent[i] = '\0';
-            snprintf(label, sizeof(label), "%s %s", agent, state);
-        } else {
-            snprintf(label, sizeof(label), "%s", state);
-        }
+        const agent_session_t *s = selected_session();
+        color = color_for_session(s);
+        session_primary_label(s, state_buf, sizeof(state_buf));
+        lv_label_set_text(s_status_state, state_buf);
+        lv_label_set_text(s_status_waiting,
+                          (s && s->waiting_for[0]) ? s->waiting_for : "");
     }
 
     lv_obj_set_style_bg_color(s_status_box, rgb(color), 0);
-    lv_obj_set_style_text_color(s_status_label, lv_color_black(), 0);
-    lv_label_set_text(s_status_label, label);
-    lv_obj_center(s_status_label);
+    lv_obj_set_style_text_color(s_status_state, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_status_waiting, lv_color_black(), 0);
 }
 
 static void update_sessions(void)
 {
     if (!s_snap.connected) {
-        lv_label_set_text(s_sessions, "");
+        lv_label_set_text(s_sessions_count, "");
+        lv_label_set_text(s_sessions_name, "");
         return;
     }
-    lv_label_set_text_fmt(s_sessions, "%d session%s active",
-                          s_snap.sessions, s_snap.sessions == 1 ? "" : "s");
+    if (s_snap.session_count <= 0) {
+        lv_label_set_text(s_sessions_count, "0");
+        lv_label_set_text(s_sessions_name, "sessions");
+        lv_obj_set_pos(s_sessions_name, X_MARGIN + 18, Y_SESSIONS);
+        lv_obj_set_width(s_sessions_name, 240 - X_MARGIN * 2 - 18);
+        return;
+    }
+
+    clamp_session_idx();
+    const agent_session_t *s = &s_snap.sessions[s_session_idx];
+    const char *name = s->name[0] ? s->name : (s->cwd[0] ? s->cwd : "session");
+
+    lv_label_set_text_fmt(s_sessions_count, "%d/%d",
+                          s_session_idx + 1, s_snap.session_count);
+    lv_obj_update_layout(s_sessions_count);
+    int count_w = (int)lv_obj_get_width(s_sessions_count);
+    if (count_w < 1) count_w = 28;
+    int name_x = X_MARGIN + count_w + 8;
+    int name_w = 240 - X_MARGIN - name_x;
+    if (name_w < 40) name_w = 40;
+    lv_obj_set_pos(s_sessions_name, name_x, Y_SESSIONS);
+    lv_obj_set_width(s_sessions_name, name_w);
+    lv_label_set_text(s_sessions_name, name);
 }
 
 static void apply_snapshot_locked(void)
@@ -417,7 +517,6 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     s_scr = parent;
 
     memset(&s_snap, 0, sizeof(s_snap));
-    s_snap.status = AGENT_STATUS_OFFLINE;
     s_snap.connected = false;
     snprintf(s_snap.weekly_reset, sizeof(s_snap.weekly_reset), "--");
     snprintf(s_snap.session_reset, sizeof(s_snap.session_reset), "--");
@@ -450,8 +549,13 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     s_s_pct = make_label(parent, s_font_small, rgb(COL_TITLE));
     lv_obj_align(s_s_pct, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_SBAR + 2);
 
-    s_sessions = make_label(parent, s_font_small, rgb(COL_LABEL));
-    lv_obj_set_pos(s_sessions, X_MARGIN, Y_SESSIONS);
+    s_sessions_count = make_label(parent, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_pos(s_sessions_count, X_MARGIN, Y_SESSIONS);
+
+    s_sessions_name = make_label(parent, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_pos(s_sessions_name, X_MARGIN + 36, Y_SESSIONS);
+    lv_obj_set_width(s_sessions_name, 240 - X_MARGIN * 2 - 36);
+    lv_label_set_long_mode(s_sessions_name, LV_LABEL_LONG_SCROLL);
 
     s_divider = lv_obj_create(parent);
     lv_obj_set_size(s_divider, 240, 1);
@@ -469,12 +573,21 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_obj_set_style_bg_opa(s_status_box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_status_box, 0, 0);
     lv_obj_set_style_radius(s_status_box, 0, 0);
-    lv_obj_set_style_pad_all(s_status_box, 0, 0);
+    lv_obj_set_style_pad_all(s_status_box, 4, 0);
     lv_obj_remove_flag(s_status_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_status_label = make_label(s_status_box, s_font_value, lv_color_black());
-    lv_label_set_text(s_status_label, "OFFLINE");
-    lv_obj_center(s_status_label);
+    s_status_state = make_label(s_status_box, s_font_value, lv_color_black());
+    lv_obj_set_width(s_status_state, 232);
+    lv_obj_set_style_text_align(s_status_state, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_status_state, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(s_status_state, "OFFLINE");
+    lv_obj_align(s_status_state, LV_ALIGN_CENTER, 0, -8);
+
+    s_status_waiting = make_label(s_status_box, s_font_small, lv_color_black());
+    lv_obj_set_width(s_status_waiting, 232);
+    lv_obj_set_style_text_align(s_status_waiting, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_status_waiting, LV_LABEL_LONG_SCROLL);
+    lv_obj_align(s_status_waiting, LV_ALIGN_CENTER, 0, 18);
 
     /* Sleep overlay (hidden) */
     s_sleep_layer = lv_obj_create(parent);
@@ -506,6 +619,7 @@ void ui_set_status(const status_snapshot_t *snap)
     if (!snap) return;
     lock_ui();
     s_snap = *snap;
+    clamp_session_idx();
     apply_snapshot_locked();
     unlock_ui();
 }
@@ -525,7 +639,8 @@ void ui_set_auth_failed(bool failed)
     s_snap.auth_failed = failed;
     if (failed) {
         s_snap.connected = false;
-        s_snap.status = AGENT_STATUS_AUTH_FAILED;
+        s_snap.session_count = 0;
+        s_snap.any_active = false;
     }
     apply_snapshot_locked();
     unlock_ui();
@@ -604,7 +719,10 @@ void ui_on_tap(void)
         ui_wake();
         return;
     }
-    atomic_fetch_add(&s_enc_diff, +1);
+    lock_ui();
+    cycle_session(+1);
+    apply_snapshot_locked();
+    unlock_ui();
 }
 
 void ui_on_tap_burst(int count)
@@ -613,9 +731,11 @@ void ui_on_tap_burst(int count)
         ui_wake();
         return;
     }
-    if (count == 2) atomic_fetch_add(&s_enc_diff, -1);
-    else if (count == 3) atomic_fetch_add(&s_enc_diff, +3);
-    else if (count >= 4) atomic_fetch_add(&s_enc_diff, +1);
+    lock_ui();
+    if (count == 2) cycle_session(-1);
+    else cycle_session(+1);
+    apply_snapshot_locked();
+    unlock_ui();
 }
 
 void ui_on_long_press(void)
@@ -624,7 +744,7 @@ void ui_on_long_press(void)
         ui_wake();
         return;
     }
-    atomic_store(&s_enc_click_pending, true);
+    /* Reserved — no settings UI yet. */
 }
 
 int ui_get_brightness(void)

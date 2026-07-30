@@ -19,7 +19,7 @@ static const char *TAG = "app_ws";
 
 #define WS_DISCOVER_MS       15000
 #define WS_URI_LEN           96
-#define WS_RX_MAX            2048
+#define WS_RX_MAX            8192
 #define WS_RX_QUEUE_LEN      6
 
 static esp_websocket_client_handle_t s_client;
@@ -99,19 +99,19 @@ static void apply_config(const app_proto_config_t *cfg)
 
 static void apply_status(const status_snapshot_t *st)
 {
-    agent_status_t prev = s_last_status.status;
+    bool prev_active = s_last_status.any_active;
     bool was_connected = s_last_status.connected;
     bool was_sleeping = ui_is_sleeping();
 
     s_last_status = *st;
     ui_set_status(st);
 
-    if (st->status == AGENT_STATUS_WORKING || st->status == AGENT_STATUS_WAITING) {
+    if (st->any_active) {
         touch_active();
     }
 
     if ((was_sleeping && !was_connected) ||
-        (st->status != AGENT_STATUS_IDLE && st->status != prev)) {
+        (st->any_active && !prev_active)) {
         ui_wake();
     }
 }
@@ -260,7 +260,7 @@ static bool begin_ws(const char *host, uint16_t port)
         .disable_auto_reconnect = true,
         .disable_pingpong_discon = true,
         .network_timeout_ms = 10000,
-        .buffer_size = 4096,
+        .buffer_size = 8192,
         .task_stack = 8192,
         .ping_interval_sec = 30,
     };
@@ -303,7 +303,6 @@ static void flush_ui_flags(void)
         if (!s_last_status.connected) {
             status_snapshot_t st = s_last_status;
             st.connected = true;
-            if (st.status == AGENT_STATUS_OFFLINE) st.status = AGENT_STATUS_IDLE;
             apply_status(&st);
         }
         ui_wake();

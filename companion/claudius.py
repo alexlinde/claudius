@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-claudius.py — minimal Claude Code companion for the GeekMagic-S3 screen.
+claudius.py — Claude Code companion for the GeekMagic-S3 screen.
 
-Talks the same WebSocket protocol as henrikekblad/codelight's screen client:
-  mDNS `_claudius._tcp` → ws://host:8765 → challenge/HMAC → subscribe →
-  config + untyped status frames (working/waiting/idle + usage bars).
-
-Claude-only. No remote control, multi-agent, D-Bus, or conversation feed.
+Polls `claude agents --json` for live session state and pushes usage +
+per-session detail over WebSocket (mDNS `_claudius._tcp` → ws://host:8765).
 
 Usage:
     pip install websockets zeroconf
     python3 companion/claudius.py --name my-laptop
     python3 companion/claudius.py --name my-laptop --secret mypassword
-    python3 companion/claudius.py --uninstall
+    python3 companion/claudius.py --uninstall   # remove leftover Claude hooks
 """
 
 from __future__ import annotations
@@ -24,9 +21,9 @@ import hmac
 import json
 import os
 import secrets
-import shlex
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -45,7 +42,7 @@ except ImportError:
 
 
 def _import_websockets():
-    """Lazy — hook invocations must not require websockets installed."""
+    """Lazy — uninstall path must not require websockets installed."""
     try:
         from websockets.asyncio.server import serve as ws_serve
         return ws_serve
@@ -63,22 +60,18 @@ def _import_websockets():
 
 CONFIG_HOME = os.path.expanduser(
     os.environ.get("GM_CLAUDE_CONFIG_HOME", "~/.config/gm-claude"))
-SOCKET_PATH = os.path.join(CONFIG_HOME, "gm-claude.sock")
-MONITOR_DIR = os.path.join(CONFIG_HOME, "monitor_state")
 CLAUDE_SETTINGS = os.path.expanduser("~/.claude/settings.json")
 CLAUDE_CREDS = os.path.expanduser("~/.claude/.credentials.json")
-# macOS Claude Code stores OAuth in the login keychain (not a file).
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 USAGE_API = "https://claude.ai/api/oauth/usage"
 WS_PORT_DEFAULT = 8765
 USAGE_INTERVAL = 60
-IDLE_WINDOW = 600          # drop silent "working" sessions
-IDLE_WINDOW_WAITING = 30   # drop silent "waiting" sessions
+AGENTS_INTERVAL = 2.0
+MAX_SESSIONS = 8
 AGENT_ID = "claude"
 AGENT_DISPLAY = "Claude"
 AGENT_COLOR = "#DE7356"
 
-# 48×48 1-bit Claude logo (same bitmap layout as upstream codelight screens).
 LOGO_BITMAP = (
     "AAAAAAAAAAYAAAAAAA+AGAAAAA+APAAAAA/APAAAAA/AOAAAAAfAOAcAAAfgOA8AAAPgOB+"
     "AAAPweB8AB4HweD8AB8D4cH4AB+D4cP4AB/B8cfwAAfx8c/gAAP4+c/gAAD8eZ/AAAB/ef"
@@ -95,18 +88,24 @@ DEFAULT_USAGE = {
     "weekly_reset": "--",
 }
 
+# Status / state values that mean the session is actively doing work or
+# blocked on the user — used for wake / activity heuristics on the screen.
+ACTIVE_STATES = frozenset({"working", "blocked"})
+ACTIVE_STATUSES = frozenset({"busy", "waiting"})
+
 
 # ── Shared state ─────────────────────────────────────────────────────────────
 
 _shutdown = threading.Event()
 _lock = threading.RLock()
-_sessions: dict[str, dict[str, Any]] = {}
+_agent_sessions: list[dict[str, Any]] = []
 _usage: dict[str, Any] = dict(DEFAULT_USAGE)
 _clients: set = set()
 _ws_loop: asyncio.AbstractEventLoop | None = None
 _secret = ""
 _verbose = False
 _creds_warned = False
+_claude_bin = "claude"
 
 
 def log(msg: str) -> None:
@@ -157,11 +156,9 @@ def _creds_from_file() -> dict | None:
 
 
 def _creds_from_keychain() -> dict | None:
-    """Claude Code on macOS stores OAuth JSON in the login keychain."""
     if sys.platform != "darwin":
         return None
     try:
-        import subprocess
         raw = subprocess.check_output(
             ["security", "find-generic-password",
              "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
@@ -230,56 +227,128 @@ def fetch_claude_usage() -> dict[str, Any] | None:
     }
 
 
-# ── Session / status ─────────────────────────────────────────────────────────
+# ── Agents poll (`claude agents --json`) ─────────────────────────────────────
 
-def update_session(session_id: str, state: str) -> None:
+def _cwd_basename(cwd: str) -> str:
+    if not cwd:
+        return ""
+    return os.path.basename(os.path.normpath(cwd)) or cwd
+
+
+def _truncate(s: str, n: int) -> str:
+    s = str(s or "")
+    if len(s) <= n:
+        return s
+    if n <= 1:
+        return s[:n]
+    return s[: n - 1] + "…"
+
+
+def normalize_session(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Compact one `claude agents --json` entry for the screen."""
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("kind") or "")
+    name = str(raw.get("name") or "") or _cwd_basename(str(raw.get("cwd") or ""))
+    out: dict[str, Any] = {
+        "cwd": _truncate(_cwd_basename(str(raw.get("cwd") or "")), 40),
+        "kind": _truncate(kind, 16),
+        "name": _truncate(name, 40),
+        "startedAt": int(raw.get("startedAt") or 0),
+    }
+    if raw.get("id"):
+        out["id"] = _truncate(str(raw["id"]), 16)
+    if raw.get("sessionId"):
+        out["sessionId"] = _truncate(str(raw["sessionId"]), 40)
+    if raw.get("state"):
+        out["state"] = _truncate(str(raw["state"]), 24)
+    if raw.get("status"):
+        out["status"] = _truncate(str(raw["status"]), 24)
+    if raw.get("waitingFor"):
+        out["waitingFor"] = _truncate(str(raw["waitingFor"]), 48)
+    if raw.get("pid") is not None:
+        try:
+            out["pid"] = int(raw["pid"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def session_is_active(s: dict[str, Any]) -> bool:
+    state = str(s.get("state") or "").lower()
+    status = str(s.get("status") or "").lower()
+    return state in ACTIVE_STATES or status in ACTIVE_STATUSES
+
+
+def session_sort_key(s: dict[str, Any]) -> tuple:
+    """Active first, then by startedAt descending (newest first)."""
+    return (0 if session_is_active(s) else 1, -(int(s.get("startedAt") or 0)))
+
+
+def fetch_agent_sessions() -> list[dict[str, Any]] | None:
+    """Return normalized sessions, or None on hard failure (keep last)."""
+    try:
+        proc = subprocess.run(
+            [_claude_bin, "agents", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except FileNotFoundError:
+        log(f"[agents] `{_claude_bin}` not found on PATH")
+        return []
+    except subprocess.TimeoutExpired:
+        log("[agents] timed out")
+        return None
+    except Exception as e:
+        log(f"[agents] {e}")
+        return None
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip().splitlines()
+        log(f"[agents] exit {proc.returncode}"
+            + (f": {err[-1]}" if err else ""))
+        return None
+
+    try:
+        data = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError as e:
+        log(f"[agents] bad JSON: {e}")
+        return None
+    if not isinstance(data, list):
+        log("[agents] expected a JSON array")
+        return None
+
+    sessions: list[dict[str, Any]] = []
+    for raw in data:
+        s = normalize_session(raw)
+        if s:
+            sessions.append(s)
+    sessions.sort(key=session_sort_key)
+    return sessions[:MAX_SESSIONS]
+
+
+def set_agent_sessions(sessions: list[dict[str, Any]]) -> bool:
+    """Replace cached sessions. Returns True if the list changed."""
+    global _agent_sessions
     with _lock:
-        if state == "ended":
-            _sessions.pop(session_id, None)
-        else:
-            _sessions[session_id] = {"state": state, "time": time.time()}
-
-
-def prune_sessions() -> None:
-    now = time.time()
-    with _lock:
-        dead = []
-        for sid, info in _sessions.items():
-            window = IDLE_WINDOW_WAITING if info["state"] == "waiting" else IDLE_WINDOW
-            if now - info["time"] > window:
-                dead.append(sid)
-        for sid in dead:
-            del _sessions[sid]
-            vlog(f"[state] pruned idle session {sid}")
-
-
-def overall_status() -> tuple[int, str]:
-    prune_sessions()
-    with _lock:
-        if not _sessions:
-            return 0, "idle"
-        states = [s["state"] for s in _sessions.values()]
-        if "working" in states:
-            return len(_sessions), "working"
-        if "waiting" in states:
-            return len(_sessions), "waiting"
-        return len(_sessions), "idle"
+        if sessions == _agent_sessions:
+            return False
+        _agent_sessions = list(sessions)
+        return True
 
 
 def status_snapshot() -> dict[str, Any]:
-    sessions, status = overall_status()
     with _lock:
         usage = dict(_usage)
+        sessions = list(_agent_sessions)
     return {
         **usage,
         "sessions": sessions,
-        "status": status,
         "agent_id": AGENT_ID,
         "agent_display": AGENT_DISPLAY,
         "weekly_title": f"{AGENT_DISPLAY} Weekly" if "weekly_pct" in usage else "",
         "session_title": f"{AGENT_DISPLAY} Session" if "session_pct" in usage else "",
-        "per_agent_status": {AGENT_ID: status},
-        "last_active_agent": AGENT_ID,
     }
 
 
@@ -296,35 +365,48 @@ def client_config() -> dict[str, Any]:
     }
 
 
+def _sessions_fingerprint(sessions: list[dict[str, Any]]) -> str:
+    parts = []
+    for s in sessions:
+        parts.append(
+            f"{s.get('sessionId') or s.get('id') or s.get('name')}|"
+            f"{s.get('state')}|{s.get('status')}|{s.get('waitingFor')}"
+        )
+    return ";".join(parts)
+
+
 # ── Broadcast ────────────────────────────────────────────────────────────────
 
 _last_broadcast_key: str = ""
 _last_broadcast_mono: float = 0.0
-_BROADCAST_MIN_INTERVAL = 1.0  # seconds — ESP client can't absorb a flood
+_BROADCAST_MIN_INTERVAL = 0.5
 
 
 def _status_key(payload: dict[str, Any]) -> str:
-    """Stable key ignoring countdown strings that change every second."""
+    sessions = payload.get("sessions") or []
     return (
-        f"{payload.get('status')}|{payload.get('sessions')}|"
+        f"{_sessions_fingerprint(sessions)}|"
         f"{payload.get('session_pct')}|{payload.get('weekly_pct')}"
     )
 
 
-def broadcast_status() -> None:
+def broadcast_status(*, force: bool = False) -> None:
     global _ws_loop, _last_broadcast_key, _last_broadcast_mono
     payload = status_snapshot()
     key = _status_key(payload)
     now = time.monotonic()
-    if key == _last_broadcast_key and (now - _last_broadcast_mono) < 5.0:
-        return
-    if (now - _last_broadcast_mono) < _BROADCAST_MIN_INTERVAL:
-        return
+    if not force:
+        if key == _last_broadcast_key and (now - _last_broadcast_mono) < 5.0:
+            return
+        if (now - _last_broadcast_mono) < _BROADCAST_MIN_INTERVAL:
+            return
     _last_broadcast_key = key
     _last_broadcast_mono = now
     msg = json.dumps(payload)
 
-    log(f"[status] {payload.get('status')} sessions={payload['sessions']} "
+    sessions = payload.get("sessions") or []
+    active = sum(1 for s in sessions if session_is_active(s))
+    log(f"[status] sessions={len(sessions)} active={active} "
         f"session={payload['session_pct']:.0%} weekly={payload['weekly_pct']:.0%}")
     loop = _ws_loop
     if loop is None or not _clients:
@@ -425,26 +507,13 @@ async def _ws_main(port: int) -> None:
     global _ws_loop
     ws_serve = _import_websockets()
     _ws_loop = asyncio.get_running_loop()
-    last_status = "idle"
-    # compression=None: ESP32 websocket client mishandles permessage-deflate.
-    # Keep server pings so half-open ESP sockets get pruned.
     async with ws_serve(
         _handle_client, "0.0.0.0", port,
         compression=None, ping_interval=20, ping_timeout=20,
     ):
         log(f"[ws] listening on :{port}")
         while not _shutdown.is_set():
-            await asyncio.sleep(2)
-            _, status = overall_status()
-            if status != last_status:
-                last_status = status
-                if _clients:
-                    msg = json.dumps(status_snapshot())
-                    log(f"[ws] timeout → {status}")
-                    await asyncio.gather(
-                        *[c.send(msg) for c in list(_clients)],
-                        return_exceptions=True,
-                    )
+            await asyncio.sleep(1)
 
 
 def ws_thread(port: int) -> None:
@@ -499,9 +568,6 @@ def mdns_thread(port: int, name: str) -> None:
                 pass
             try:
                 zc = Zeroconf(interfaces=[ip])
-                # Explicit server= so A records use name.local, not the full
-                # service name (…_claudius._tcp.local) which ESP-IDF often
-                # fails to attach as an address on PTR results.
                 info = ServiceInfo(
                     "_claudius._tcp.local.",
                     f"{name}._claudius._tcp.local.",
@@ -530,117 +596,15 @@ def mdns_thread(port: int, name: str) -> None:
         pass
 
 
-# ── Unix socket (hooks) ──────────────────────────────────────────────────────
+# ── Pollers ──────────────────────────────────────────────────────────────────
 
-def handle_hook_message(msg: dict) -> None:
-    state = str(msg.get("state") or "")
-    session_id = str(msg.get("session_id") or "unknown")
-    if state not in ("working", "waiting", "ended"):
-        return
-    update_session(session_id, state)
-    vlog(f"[hook] {state} session={session_id}")
-    broadcast_status()
+def agents_thread() -> None:
+    while not _shutdown.is_set():
+        sessions = fetch_agent_sessions()
+        if sessions is not None and set_agent_sessions(sessions):
+            broadcast_status()
+        _shutdown.wait(AGENTS_INTERVAL)
 
-
-def socket_thread() -> None:
-    os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
-    try:
-        os.unlink(SOCKET_PATH)
-    except FileNotFoundError:
-        pass
-
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCKET_PATH)
-    server.listen(32)
-    server.settimeout(1.0)
-    log(f"[socket] {SOCKET_PATH}")
-
-    try:
-        while not _shutdown.is_set():
-            try:
-                conn, _ = server.accept()
-            except socket.timeout:
-                continue
-            try:
-                conn.settimeout(2.0)
-                raw = b""
-                while b"\n" not in raw and len(raw) < 8192:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    raw += chunk
-                if raw.strip():
-                    data = json.loads(raw.split(b"\n", 1)[0].decode())
-                    if isinstance(data, dict):
-                        handle_hook_message(data)
-            except Exception as e:
-                vlog(f"[socket] {e}")
-            finally:
-                conn.close()
-    finally:
-        server.close()
-        try:
-            os.unlink(SOCKET_PATH)
-        except FileNotFoundError:
-            pass
-
-
-def send_hook_event(state: str, session_id: str, hook_event: str = "") -> bool:
-    payload = {
-        "state": state,
-        "session_id": session_id,
-        "agent_id": AGENT_ID,
-        "hook_event": hook_event,
-    }
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        sock.connect(SOCKET_PATH)
-        sock.sendall(json.dumps(payload).encode())
-        sock.close()
-        return True
-    except Exception:
-        return False
-
-
-def write_monitor_fallback(session_id: str, state: str) -> None:
-    os.makedirs(MONITOR_DIR, exist_ok=True)
-    path = os.path.join(MONITOR_DIR, f"{session_id}.json")
-    if state == "ended":
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-        return
-    with open(path, "w") as f:
-        json.dump({"state": state, "time": time.time(),
-                   "session_id": session_id, "agent_id": AGENT_ID}, f)
-
-
-def run_hook(state: str) -> None:
-    """Invoked by Claude Code hooks: read stdin JSON, notify daemon."""
-    try:
-        data = json.loads(sys.stdin.read() or "{}")
-        if not isinstance(data, dict):
-            data = {}
-    except Exception:
-        data = {}
-    session_id = str(
-        data.get("session_id")
-        or data.get("sessionId")
-        or data.get("session")
-        or "unknown"
-    )
-    hook_event = str(
-        data.get("hook_event_name")
-        or data.get("hookEventName")
-        or ""
-    )
-    if not send_hook_event(state, session_id, hook_event):
-        write_monitor_fallback(session_id, state)
-
-
-# ── Usage poller ─────────────────────────────────────────────────────────────
 
 def usage_thread() -> None:
     while not _shutdown.is_set():
@@ -648,24 +612,13 @@ def usage_thread() -> None:
         if usage:
             with _lock:
                 _usage.update(usage)
-            # Refresh countdown strings on every push.
             broadcast_status()
         _shutdown.wait(USAGE_INTERVAL)
 
 
-# ── Claude Code hook install ─────────────────────────────────────────────────
-
-def self_path() -> str:
-    return os.path.abspath(os.path.realpath(__file__))
-
-
-def hook_cmd(state: str) -> str:
-    interp = sys.executable
-    return f"{shlex.quote(interp)} {shlex.quote(self_path())} --hook {state}"
-
+# ── Legacy hook cleanup ──────────────────────────────────────────────────────
 
 def is_ours(cmd: str) -> bool:
-    # Match current and pre-rename script names in Claude settings hooks.
     return "--hook" in cmd and ("claudius" in cmd or "gm-claude" in cmd)
 
 
@@ -695,54 +648,8 @@ def _strip_our_hooks(hooks: dict) -> None:
             del hooks[event]
 
 
-def install_hooks() -> None:
-    path = CLAUDE_SETTINGS
-    try:
-        with open(path) as f:
-            doc = json.load(f)
-        if not isinstance(doc, dict):
-            doc = {}
-    except FileNotFoundError:
-        doc = {}
-    except Exception as e:
-        log(f"[hooks] could not read {path}: {e}")
-        return
-
-    hooks = doc.get("hooks")
-    if not isinstance(hooks, dict):
-        hooks = {}
-
-    _strip_our_hooks(hooks)
-
-    def entry(cmd: str) -> dict:
-        return {"matcher": "", "hooks": [{"type": "command", "command": cmd}]}
-
-    desired = {
-        "PreToolUse":       entry(hook_cmd("working")),
-        "PostToolUse":      entry(hook_cmd("working")),
-        "UserPromptSubmit": entry(hook_cmd("working")),
-        "PermissionRequest": entry(hook_cmd("waiting")),
-        "PermissionDenied": entry(hook_cmd("working")),
-        "Stop":             entry(hook_cmd("ended")),
-        "SessionEnd":       entry(hook_cmd("ended")),
-    }
-    for event, slot in desired.items():
-        hooks.setdefault(event, [])
-        if not isinstance(hooks[event], list):
-            hooks[event] = []
-        hooks[event].append(slot)
-
-    doc["hooks"] = hooks
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
-    log(f"[hooks] installed in {path}")
-
-
 def uninstall_hooks() -> None:
+    """Remove leftover Claude Code hooks from earlier claudius versions."""
     path = CLAUDE_SETTINGS
     try:
         with open(path) as f:
@@ -759,7 +666,13 @@ def uninstall_hooks() -> None:
         log("[hooks] nothing to uninstall")
         return
 
+    before = json.dumps(hooks, sort_keys=True)
     _strip_our_hooks(hooks)
+    after = json.dumps(hooks, sort_keys=True)
+    if before == after:
+        log("[hooks] nothing to uninstall")
+        return
+
     doc["hooks"] = hooks
     tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w") as f:
@@ -772,7 +685,7 @@ def uninstall_hooks() -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    global _secret, _verbose
+    global _secret, _verbose, _claude_bin
 
     parser = argparse.ArgumentParser(
         description="Claude-only companion for the GeekMagic-S3 claudius screen")
@@ -780,11 +693,10 @@ def main() -> None:
     parser.add_argument("--secret", default="", help="optional shared HMAC secret")
     parser.add_argument("--port", type=int, default=WS_PORT_DEFAULT,
                         help=f"WebSocket port (default {WS_PORT_DEFAULT})")
-    parser.add_argument("--hook", choices=("working", "waiting", "ended"),
-                        help=argparse.SUPPRESS)
-    parser.add_argument("--agent", default=AGENT_ID, help=argparse.SUPPRESS)
+    parser.add_argument("--claude", default="claude",
+                        help="claude CLI binary (default: claude)")
     parser.add_argument("--uninstall", action="store_true",
-                        help="remove Claude Code hooks and exit")
+                        help="remove leftover Claude Code hooks and exit")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -792,41 +704,41 @@ def main() -> None:
         uninstall_hooks()
         return
 
-    if args.hook:
-        run_hook(args.hook)
-        return
-
     if not args.name:
         parser.error("--name is required (e.g. --name my-laptop)")
 
     _secret = args.secret or ""
     _verbose = args.verbose
+    _claude_bin = args.claude
     os.makedirs(CONFIG_HOME, exist_ok=True)
 
-    install_hooks()
+    # Drop hook-based monitoring from earlier versions so we don't double-report.
+    uninstall_hooks()
 
     log(f"claudius  [ws://0.0.0.0:{args.port}]  name={args.name}"
         + ("  (secret set)" if _secret else ""))
-    log("Ctrl-C to stop")
+    log("polling `claude agents --json` — Ctrl-C to stop")
 
-    threading.Thread(target=socket_thread, daemon=True).start()
+    threading.Thread(target=agents_thread, daemon=True).start()
     threading.Thread(target=usage_thread, daemon=True).start()
     threading.Thread(target=ws_thread, args=(args.port,), daemon=True).start()
     threading.Thread(target=mdns_thread, args=(args.port, args.name),
                      daemon=True).start()
 
-    # Initial usage fetch soon after start.
-    def _boot_usage() -> None:
-        _shutdown.wait(2)
+    def _boot() -> None:
+        _shutdown.wait(1)
         if _shutdown.is_set():
             return
+        sessions = fetch_agent_sessions()
+        if sessions is not None:
+            set_agent_sessions(sessions)
         usage = fetch_claude_usage()
         if usage:
             with _lock:
                 _usage.update(usage)
-            broadcast_status()
+        broadcast_status(force=True)
 
-    threading.Thread(target=_boot_usage, daemon=True).start()
+    threading.Thread(target=_boot, daemon=True).start()
 
     signal.signal(signal.SIGTERM, lambda *_: (_shutdown.set(), sys.exit(0)))
     try:

@@ -23,13 +23,30 @@ static void sim_brightness_cb(int percent)
     printf("[sim] backlight -> %d%%\n", percent);
 }
 
-static void fill_mock(status_snapshot_t *s, agent_status_t st, bool connected)
+static void add_session(status_snapshot_t *s,
+                        const char *name, const char *kind,
+                        const char *state, const char *status,
+                        const char *waiting_for, const char *cwd)
+{
+    if (s->session_count >= MAX_SESSIONS) return;
+    agent_session_t *a = &s->sessions[s->session_count++];
+    if (name) snprintf(a->name, sizeof(a->name), "%s", name);
+    if (kind) snprintf(a->kind, sizeof(a->kind), "%s", kind);
+    if (state) snprintf(a->state, sizeof(a->state), "%s", state);
+    if (status) snprintf(a->status, sizeof(a->status), "%s", status);
+    if (waiting_for) snprintf(a->waiting_for, sizeof(a->waiting_for), "%s", waiting_for);
+    if (cwd) snprintf(a->cwd, sizeof(a->cwd), "%s", cwd);
+    if ((state && (strcmp(state, "working") == 0 || strcmp(state, "blocked") == 0)) ||
+        (status && (strcmp(status, "busy") == 0 || strcmp(status, "waiting") == 0))) {
+        s->any_active = true;
+    }
+}
+
+static void fill_mock_base(status_snapshot_t *s, bool connected)
 {
     memset(s, 0, sizeof(*s));
     s->connected = connected;
     s->auth_failed = false;
-    s->status = st;
-    s->sessions = connected ? 2 : 0;
     snprintf(s->agent_display, sizeof(s->agent_display), "Claude");
     snprintf(s->agent_id, sizeof(s->agent_id), "claude");
     if (connected) {
@@ -47,31 +64,44 @@ static void apply_key_mock(SDL_Scancode key)
     status_snapshot_t snap;
     switch (key) {
     case SDL_SCANCODE_1:
-        fill_mock(&snap, AGENT_STATUS_WORKING, true);
-        printf("[sim] mock WORKING\n");
+        fill_mock_base(&snap, true);
+        add_session(&snap, "Review SPEC.md…", "background",
+                    "working", "busy", NULL, "toy-jepa");
+        add_session(&snap, "gm-claude-8a", "interactive",
+                    NULL, NULL, NULL, "gm-claude");
+        add_session(&snap, "aescape-admin-38", "interactive",
+                    NULL, NULL, NULL, "aescape-admin");
+        printf("[sim] mock WORKING + 3 sessions\n");
         ui_set_status(&snap);
         ui_wake();
         break;
     case SDL_SCANCODE_2:
-        fill_mock(&snap, AGENT_STATUS_WAITING, true);
-        printf("[sim] mock WAITING\n");
+        fill_mock_base(&snap, true);
+        add_session(&snap, "gm-claude-8a", "interactive",
+                    "blocked", "waiting", "permission prompt", "gm-claude");
+        add_session(&snap, "Review SPEC.md…", "background",
+                    "working", "busy", NULL, "toy-jepa");
+        printf("[sim] mock WAITING (permission prompt)\n");
         ui_set_status(&snap);
         ui_wake();
         break;
     case SDL_SCANCODE_3:
-        fill_mock(&snap, AGENT_STATUS_IDLE, true);
-        printf("[sim] mock IDLE\n");
+        fill_mock_base(&snap, true);
+        add_session(&snap, "gm-claude-8a", "interactive",
+                    NULL, NULL, NULL, "gm-claude");
+        add_session(&snap, "old-job", "background",
+                    "done", NULL, NULL, "toy-jepa");
+        printf("[sim] mock interactive + done\n");
         ui_set_status(&snap);
         break;
     case SDL_SCANCODE_0:
-        fill_mock(&snap, AGENT_STATUS_OFFLINE, false);
+        fill_mock_base(&snap, false);
         printf("[sim] mock OFFLINE\n");
         ui_set_status(&snap);
         break;
     case SDL_SCANCODE_4:
         memset(&snap, 0, sizeof(snap));
         snap.auth_failed = true;
-        snap.status = AGENT_STATUS_AUTH_FAILED;
         printf("[sim] mock AUTH FAIL\n");
         ui_set_status(&snap);
         break;
@@ -101,12 +131,16 @@ int main(void)
     ui_set_utc_offset(-7 * 3600); /* PT for local testing */
 
     status_snapshot_t initial;
-    fill_mock(&initial, AGENT_STATUS_IDLE, true);
+    fill_mock_base(&initial, true);
+    add_session(&initial, "gm-claude-8a", "interactive",
+                NULL, NULL, NULL, "gm-claude");
     ui_set_status(&initial);
 
     printf("gm-s3 simulator — claudius status UI\n");
-    printf("  SPACE = touch pad (tap / burst / long-press)\n");
-    printf("  1/2/3 = WORKING / WAITING / IDLE\n");
+    printf("  SPACE = touch pad (tap cycles sessions / double = prev)\n");
+    printf("  1     = working + 3 sessions\n");
+    printf("  2     = waitingFor permission prompt\n");
+    printf("  3     = interactive + done\n");
     printf("  0     = OFFLINE\n");
     printf("  4     = AUTH FAIL\n");
     printf("  S     = toggle screensaver\n");

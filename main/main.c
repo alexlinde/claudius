@@ -36,7 +36,6 @@ static void show_boot_hint(void)
 {
     status_snapshot_t snap = {0};
     snap.connected = false;
-    snap.status = AGENT_STATUS_OFFLINE;
     if (app_wifi_mode() == APP_WIFI_MODE_AP) {
         snprintf(snap.weekly_title, sizeof(snap.weekly_title), "Setup mode");
         snap.weekly_pct = 0;
@@ -44,7 +43,7 @@ static void show_boot_hint(void)
         snprintf(snap.session_title, sizeof(snap.session_title), APP_AP_SSID);
         snprintf(snap.session_reset, sizeof(snap.session_reset), "cfg");
         snap.session_pct = 0;
-        snap.sessions = 0;
+        snap.session_count = 0;
         snprintf(snap.agent_display, sizeof(snap.agent_display), "Setup");
     }
     ui_set_status(&snap);

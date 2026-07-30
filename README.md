@@ -8,7 +8,8 @@ Protocol and layout are inspired by
 
 The device is a WebSocket client: it discovers the companion via mDNS
 (`_claudius._tcp`) or a configured host, subscribes as `client: screen`, and
-shows usage bars plus WORKING / WAITING / IDLE on the 240×240 display.
+shows usage bars plus each Claude session’s exact `state` / `status` /
+`waitingFor` from `claude agents --json`. Tap cycles between sessions.
 
 ## Hardware
 
@@ -23,14 +24,14 @@ shows usage bars plus WORKING / WAITING / IDLE on the 240×240 display.
 ## Architecture
 
 ```
-Claude Code
-        │ hooks
+claude agents --json
+        │ poll (~2s)
         ▼
 claudius.py companion (:8765, mDNS _claudius._tcp)
-        │ WebSocket push
+        │ WebSocket push (sessions[] + usage)
         ▼
 GeekMagic-S3 firmware (claudius)
-  WiFi → mDNS/host → WS auth → LVGL status UI
+  WiFi → mDNS/host → WS auth → LVGL status UI (tap cycles sessions)
 ```
 
 ## Companion (Claude status → screen)
@@ -47,9 +48,10 @@ python3 claudius.py --name my-laptop
 python3 claudius.py --name my-laptop --secret mypassword
 ```
 
-It installs Claude Code hooks into `~/.claude/settings.json`, advertises
-`_claudius._tcp` via mDNS, and pushes WORKING / WAITING / IDLE plus usage
-bars to the GeekMagic-S3. Remove hooks with:
+It polls `claude agents --json` for live session state, advertises
+`_claudius._tcp` via mDNS, and pushes per-session `state` / `status` /
+`waitingFor` plus usage bars to the GeekMagic-S3. If you previously used an
+older hook-based companion, remove leftover hooks with:
 
 ```bash
 python3 claudius.py --uninstall
@@ -95,8 +97,8 @@ cmake --build sim/build -j
 
 | Key   | Action                          |
 |-------|---------------------------------|
-| SPACE | Touch pad (tap / burst / long)  |
-| 1/2/3 | Mock WORKING / WAITING / IDLE   |
+| SPACE | Touch pad (tap cycles sessions) |
+| 1/2/3 | Mock working / waiting / idle   |
 | 0     | Mock OFFLINE                    |
 | 4     | Mock AUTH FAIL                  |
 | S     | Toggle screensaver              |
@@ -105,13 +107,14 @@ cmake --build sim/build -j
 
 | Gesture    | Effect                                      |
 |------------|---------------------------------------------|
-| Tap        | Wake from screensaver (else encoder next)   |
-| Double tap | Encoder prev                                |
-| Long press | Wake / encoder click                        |
+| Tap        | Wake from screensaver, else next session    |
+| Double tap | Previous session                            |
+| Long press | Wake from screensaver                       |
 
 Screensaver starts after 10 minutes without a companion (if enabled) or after
-1 hour of idle status. Working/waiting activity wakes the dashboard. Agent logos
-from the companion `config` message bounce on the sleep screen.
+1 hour without active sessions. Active (`working` / `blocked` / `busy` /
+`waiting`) activity wakes the dashboard. Agent logos from the companion
+`config` message bounce on the sleep screen.
 
 ## OTA
 

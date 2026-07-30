@@ -34,6 +34,35 @@ static void copy_str(char *dst, size_t dst_len, const cJSON *obj, const char *ke
     }
 }
 
+static bool session_looks_active(const agent_session_t *s)
+{
+    if (!s) return false;
+    if (strcmp(s->state, "working") == 0 || strcmp(s->state, "blocked") == 0) {
+        return true;
+    }
+    if (strcmp(s->status, "busy") == 0 || strcmp(s->status, "waiting") == 0) {
+        return true;
+    }
+    return false;
+}
+
+static void parse_one_session(const cJSON *obj, agent_session_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    copy_str(out->name, sizeof(out->name), obj, "name");
+    copy_str(out->kind, sizeof(out->kind), obj, "kind");
+    copy_str(out->id, sizeof(out->id), obj, "id");
+    copy_str(out->state, sizeof(out->state), obj, "state");
+    copy_str(out->status, sizeof(out->status), obj, "status");
+    copy_str(out->waiting_for, sizeof(out->waiting_for), obj, "waitingFor");
+    copy_str(out->cwd, sizeof(out->cwd), obj, "cwd");
+    if (!out->name[0] && out->cwd[0]) {
+        char tmp[SESSION_CWD_LEN];
+        snprintf(tmp, sizeof(tmp), "%s", out->cwd);
+        snprintf(out->name, sizeof(out->name), "%s", tmp);
+    }
+}
+
 bool app_proto_parse(const char *json, size_t len, app_proto_msg_t *out)
 {
     if (!json || !out) return false;
@@ -111,13 +140,18 @@ bool app_proto_parse(const char *json, size_t len, app_proto_msg_t *out)
     copy_str(s->agent_id, sizeof(s->agent_id), doc, "agent_id");
 
     const cJSON *sessions = cJSON_GetObjectItemCaseSensitive(doc, "sessions");
-    s->sessions = cJSON_IsNumber(sessions) ? sessions->valueint : 0;
-
-    const cJSON *st = cJSON_GetObjectItemCaseSensitive(doc, "status");
-    const char *st_s = (cJSON_IsString(st) && st->valuestring) ? st->valuestring : "idle";
-    if (strcmp(st_s, "working") == 0) s->status = AGENT_STATUS_WORKING;
-    else if (strcmp(st_s, "waiting") == 0) s->status = AGENT_STATUS_WAITING;
-    else s->status = AGENT_STATUS_IDLE;
+    if (cJSON_IsArray(sessions)) {
+        const cJSON *item;
+        cJSON_ArrayForEach(item, sessions) {
+            if (!cJSON_IsObject(item)) continue;
+            if (s->session_count >= MAX_SESSIONS) break;
+            parse_one_session(item, &s->sessions[s->session_count]);
+            if (session_looks_active(&s->sessions[s->session_count])) {
+                s->any_active = true;
+            }
+            s->session_count++;
+        }
+    }
 
     if (!s->weekly_reset[0]) snprintf(s->weekly_reset, sizeof(s->weekly_reset), "--");
     if (!s->session_reset[0]) snprintf(s->session_reset, sizeof(s->session_reset), "--");
