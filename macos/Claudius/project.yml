@@ -1,0 +1,63 @@
+name: Claudius
+options:
+  bundleIdPrefix: com.gmclaude
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+targets:
+  Claudius:
+    type: application
+    platform: macOS
+    sources:
+      - path: Claudius
+        excludes:
+          - "**/*.md"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gmclaude.claudius
+        PRODUCT_NAME: Claudius
+        INFOPLIST_FILE: Claudius/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Claudius/Claudius.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_TESTABILITY: YES
+    entitlements:
+      path: Claudius/Claudius.entitlements
+  ClaudiusTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ClaudiusTests
+    dependencies:
+      - target: Claudius
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gmclaude.claudius.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Claudius.app/Contents/MacOS/Claudius"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        ENABLE_TESTABILITY: YES
+schemes:
+  Claudius:
+    build:
+      targets:
+        Claudius: all
+        ClaudiusTests: [test]
+    test:
+      targets:
+        - ClaudiusTests
+    run:
+      config: Debug

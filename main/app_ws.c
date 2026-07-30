@@ -258,7 +258,7 @@ static bool begin_ws(const char *host, uint16_t port)
         .uri = uri,
         .transport = WEBSOCKET_TRANSPORT_OVER_TCP,
         .disable_auto_reconnect = true,
-        .disable_pingpong_discon = true,
+        .disable_pingpong_discon = false,
         .network_timeout_ms = 10000,
         .buffer_size = 8192,
         .task_stack = 8192,

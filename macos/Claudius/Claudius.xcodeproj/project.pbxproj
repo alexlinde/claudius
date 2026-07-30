@@ -1,0 +1,508 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0B6A00E8BB405D42DD61FD76 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97C4967B0677251778249CD /* AppPreferences.swift */; };
+		12944C9CBA03C1ED6B3DC27D /* CompanionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E542DC37B44E6B9201A4BCD /* CompanionController.swift */; };
+		372864C225EB22DAE9DCE22B /* ClaudeCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B332D253D73FCB901FFB69 /* ClaudeCredentials.swift */; };
+		37BABD51429950D6C49ACBDE /* MDNSAdvertiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306138F85A0AA49B670B2C4B /* MDNSAdvertiser.swift */; };
+		612E44CCA62F46AC673EBB6D /* StatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6882B50E7C473E8A47D005CA /* StatusStore.swift */; };
+		618652C4B6A745BB37BC8EC3 /* Auth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A35E121C5846454DDD7A1500 /* Auth.swift */; };
+		631C00F839DA14CD3423C922 /* ClaudiusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C3EE334CDBDB9FA962F0652 /* ClaudiusTests.swift */; };
+		9C3945D48BEC1704612683FE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C8CCC18CF754EDD714BD6D1C /* Assets.xcassets */; };
+		9C633F09AD4AD7CC9974E985 /* StatusPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D1ADAECACEDC62BD757AAF /* StatusPayload.swift */; };
+		ADC3C1E1DEF5177DF20435C1 /* AgentsPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F6935E1CE5356CA1845E79 /* AgentsPoller.swift */; };
+		B25328CE72BA03ECD5CB4005 /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 557D4E10AD42A38F2AC15B05 /* WebSocketServer.swift */; };
+		B3787AE473925AA850233B55 /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0729347030FBBDB3F5702DA4 /* Session.swift */; };
+		B7AE32A7EDEABD0286174DE9 /* UsageFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C82EB1EB4D0E685C1BE1E6D /* UsageFetcher.swift */; };
+		C91D322B6A6B17B9D8F19F01 /* UsageTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CCA52C2F111945E1323E60B /* UsageTime.swift */; };
+		CC41911FE20BF55719C0AF73 /* CompanionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = E681987F85F298D7A2157E8C /* CompanionConstants.swift */; };
+		D6B32221C6BA531269C54629 /* ClaudiusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB79F504F6913BF08F3B5D02 /* ClaudiusApp.swift */; };
+		E223ED2F0F9F003113009BE9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9FADD2C3D878C1008EB63CA /* SettingsView.swift */; };
+		F709BDC64E881205BDB70D9E /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50DE30E89CAAE60D425A4649 /* MenuBarView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		EA4D57830BB8F3C2B7CF6680 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EEA123870A506ABC3F51637F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3F29A4C9CB86C9311CF1C29D;
+			remoteInfo = Claudius;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0729347030FBBDB3F5702DA4 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
+		14E0B21D2AF9F54E366D63FC /* Claudius.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Claudius.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1CCA52C2F111945E1323E60B /* UsageTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageTime.swift; sourceTree = "<group>"; };
+		306138F85A0AA49B670B2C4B /* MDNSAdvertiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MDNSAdvertiser.swift; sourceTree = "<group>"; };
+		4220FBDC48E41964C9ED51B8 /* ClaudiusTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudiusTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E542DC37B44E6B9201A4BCD /* CompanionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionController.swift; sourceTree = "<group>"; };
+		50DE30E89CAAE60D425A4649 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		557D4E10AD42A38F2AC15B05 /* WebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServer.swift; sourceTree = "<group>"; };
+		5C3EE334CDBDB9FA962F0652 /* ClaudiusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudiusTests.swift; sourceTree = "<group>"; };
+		5D3D06314A5C8A0D7CFADA2D /* Claudius.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Claudius.entitlements; sourceTree = "<group>"; };
+		62B332D253D73FCB901FFB69 /* ClaudeCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCredentials.swift; sourceTree = "<group>"; };
+		6882B50E7C473E8A47D005CA /* StatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusStore.swift; sourceTree = "<group>"; };
+		6C82EB1EB4D0E685C1BE1E6D /* UsageFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageFetcher.swift; sourceTree = "<group>"; };
+		74F6935E1CE5356CA1845E79 /* AgentsPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsPoller.swift; sourceTree = "<group>"; };
+		766FE98DD431D85BCD8E758F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A35E121C5846454DDD7A1500 /* Auth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Auth.swift; sourceTree = "<group>"; };
+		B1D1ADAECACEDC62BD757AAF /* StatusPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusPayload.swift; sourceTree = "<group>"; };
+		BB79F504F6913BF08F3B5D02 /* ClaudiusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudiusApp.swift; sourceTree = "<group>"; };
+		C8CCC18CF754EDD714BD6D1C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E681987F85F298D7A2157E8C /* CompanionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConstants.swift; sourceTree = "<group>"; };
+		E9FADD2C3D878C1008EB63CA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F97C4967B0677251778249CD /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		341C553AB6820A03172CC8CA /* ClaudiusTests */ = {
+			isa = PBXGroup;
+			children = (
+				5C3EE334CDBDB9FA962F0652 /* ClaudiusTests.swift */,
+			);
+			path = ClaudiusTests;
+			sourceTree = "<group>";
+		};
+		6796B68AF25F1201127AE1B2 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A35E121C5846454DDD7A1500 /* Auth.swift */,
+				E681987F85F298D7A2157E8C /* CompanionConstants.swift */,
+				0729347030FBBDB3F5702DA4 /* Session.swift */,
+				B1D1ADAECACEDC62BD757AAF /* StatusPayload.swift */,
+				1CCA52C2F111945E1323E60B /* UsageTime.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		6FC9C3E2158FFAFF7323276B /* Claudius */ = {
+			isa = PBXGroup;
+			children = (
+				5D3D06314A5C8A0D7CFADA2D /* Claudius.entitlements */,
+				BB79F504F6913BF08F3B5D02 /* ClaudiusApp.swift */,
+				4E542DC37B44E6B9201A4BCD /* CompanionController.swift */,
+				766FE98DD431D85BCD8E758F /* Info.plist */,
+				50DE30E89CAAE60D425A4649 /* MenuBarView.swift */,
+				E9FADD2C3D878C1008EB63CA /* SettingsView.swift */,
+				6796B68AF25F1201127AE1B2 /* Models */,
+				A418C4BD19A7BD6478B2837D /* Resources */,
+				72D05EF3845A2140BD109AE8 /* Services */,
+			);
+			path = Claudius;
+			sourceTree = "<group>";
+		};
+		72D05EF3845A2140BD109AE8 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				74F6935E1CE5356CA1845E79 /* AgentsPoller.swift */,
+				F97C4967B0677251778249CD /* AppPreferences.swift */,
+				62B332D253D73FCB901FFB69 /* ClaudeCredentials.swift */,
+				306138F85A0AA49B670B2C4B /* MDNSAdvertiser.swift */,
+				6882B50E7C473E8A47D005CA /* StatusStore.swift */,
+				6C82EB1EB4D0E685C1BE1E6D /* UsageFetcher.swift */,
+				557D4E10AD42A38F2AC15B05 /* WebSocketServer.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A418C4BD19A7BD6478B2837D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C8CCC18CF754EDD714BD6D1C /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		C3F6B70B314C5F0905DB08F7 = {
+			isa = PBXGroup;
+			children = (
+				6FC9C3E2158FFAFF7323276B /* Claudius */,
+				341C553AB6820A03172CC8CA /* ClaudiusTests */,
+				CB70741ECBB9388F7C41C005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CB70741ECBB9388F7C41C005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				14E0B21D2AF9F54E366D63FC /* Claudius.app */,
+				4220FBDC48E41964C9ED51B8 /* ClaudiusTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		3F29A4C9CB86C9311CF1C29D /* Claudius */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D7F8A383719615B9070AA83E /* Build configuration list for PBXNativeTarget "Claudius" */;
+			buildPhases = (
+				686AB14CCAAD3A3E9D916FCF /* Sources */,
+				6ACA73E6B6311B49DB708B70 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Claudius;
+			packageProductDependencies = (
+			);
+			productName = Claudius;
+			productReference = 14E0B21D2AF9F54E366D63FC /* Claudius.app */;
+			productType = "com.apple.product-type.application";
+		};
+		84E97ADCE7217E2117538EDE /* ClaudiusTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DDF33509EAD95AA412EFAC7C /* Build configuration list for PBXNativeTarget "ClaudiusTests" */;
+			buildPhases = (
+				A3BABE021E30184891434353 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D855D44C5AC29B53D6525916 /* PBXTargetDependency */,
+			);
+			name = ClaudiusTests;
+			packageProductDependencies = (
+			);
+			productName = ClaudiusTests;
+			productReference = 4220FBDC48E41964C9ED51B8 /* ClaudiusTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EEA123870A506ABC3F51637F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					3F29A4C9CB86C9311CF1C29D = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					84E97ADCE7217E2117538EDE = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A20794E42AB2EDF8422C8CFF /* Build configuration list for PBXProject "Claudius" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C3F6B70B314C5F0905DB08F7;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CB70741ECBB9388F7C41C005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				3F29A4C9CB86C9311CF1C29D /* Claudius */,
+				84E97ADCE7217E2117538EDE /* ClaudiusTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6ACA73E6B6311B49DB708B70 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C3945D48BEC1704612683FE /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		686AB14CCAAD3A3E9D916FCF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ADC3C1E1DEF5177DF20435C1 /* AgentsPoller.swift in Sources */,
+				0B6A00E8BB405D42DD61FD76 /* AppPreferences.swift in Sources */,
+				618652C4B6A745BB37BC8EC3 /* Auth.swift in Sources */,
+				372864C225EB22DAE9DCE22B /* ClaudeCredentials.swift in Sources */,
+				D6B32221C6BA531269C54629 /* ClaudiusApp.swift in Sources */,
+				CC41911FE20BF55719C0AF73 /* CompanionConstants.swift in Sources */,
+				12944C9CBA03C1ED6B3DC27D /* CompanionController.swift in Sources */,
+				37BABD51429950D6C49ACBDE /* MDNSAdvertiser.swift in Sources */,
+				F709BDC64E881205BDB70D9E /* MenuBarView.swift in Sources */,
+				B3787AE473925AA850233B55 /* Session.swift in Sources */,
+				E223ED2F0F9F003113009BE9 /* SettingsView.swift in Sources */,
+				9C633F09AD4AD7CC9974E985 /* StatusPayload.swift in Sources */,
+				612E44CCA62F46AC673EBB6D /* StatusStore.swift in Sources */,
+				B7AE32A7EDEABD0286174DE9 /* UsageFetcher.swift in Sources */,
+				C91D322B6A6B17B9D8F19F01 /* UsageTime.swift in Sources */,
+				B25328CE72BA03ECD5CB4005 /* WebSocketServer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A3BABE021E30184891434353 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				631C00F839DA14CD3423C922 /* ClaudiusTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D855D44C5AC29B53D6525916 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3F29A4C9CB86C9311CF1C29D /* Claudius */;
+			targetProxy = EA4D57830BB8F3C2B7CF6680 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0D024299B5E596B43BC322C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Claudius/Claudius.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Claudius/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gmclaude.claudius;
+				PRODUCT_NAME = Claudius;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Release;
+		};
+		0E778AF3F896814BD95A04F1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.gmclaude.claudius.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Claudius.app/Contents/MacOS/Claudius";
+			};
+			name = Debug;
+		};
+		4A2910E6AC85DE1EA9F635E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		7EF0EF402B76A7BF14D1794E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Claudius/Claudius.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Claudius/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gmclaude.claudius;
+				PRODUCT_NAME = Claudius;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Debug;
+		};
+		885C3A0FCBF46BB84ABFF661 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		975BD179972BEF6DB8313471 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.gmclaude.claudius.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Claudius.app/Contents/MacOS/Claudius";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A20794E42AB2EDF8422C8CFF /* Build configuration list for PBXProject "Claudius" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				885C3A0FCBF46BB84ABFF661 /* Debug */,
+				4A2910E6AC85DE1EA9F635E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D7F8A383719615B9070AA83E /* Build configuration list for PBXNativeTarget "Claudius" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7EF0EF402B76A7BF14D1794E /* Debug */,
+				0D024299B5E596B43BC322C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DDF33509EAD95AA412EFAC7C /* Build configuration list for PBXNativeTarget "ClaudiusTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0E778AF3F896814BD95A04F1 /* Debug */,
+				975BD179972BEF6DB8313471 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EEA123870A506ABC3F51637F /* Project object */;
+}

@@ -27,7 +27,7 @@ shows usage bars plus each Claude session’s exact `state` / `status` /
 claude agents --json
         │ poll (~2s)
         ▼
-claudius.py companion (:8765, mDNS _claudius._tcp)
+Claudius.app / claudius.py (:8765, mDNS _claudius._tcp)
         │ WebSocket push (sessions[] + usage)
         ▼
 GeekMagic-S3 firmware (claudius)
@@ -36,7 +36,26 @@ GeekMagic-S3 firmware (claudius)
 
 ## Companion (Claude status → screen)
 
-A minimal Claude-only daemon lives in this repo:
+### macOS app (recommended)
+
+A menu-bar companion lives in [`macos/Claudius/`](macos/Claudius/):
+
+```bash
+cd macos/Claudius
+xcodegen generate   # once, or after editing project.yml
+open Claudius.xcodeproj
+# Product → Run, or:
+xcodebuild -scheme Claudius -configuration Release -destination 'platform=macOS' build
+
+# Signed installable DMG (see macos/Claudius/README.md):
+./release.sh --skip-notarize
+```
+
+On launch the mDNS name defaults to this Mac’s hostname (override in Preferences to match the screen). Optional shared secret goes in Preferences and must match the screen config. Enable **Open at Login** to keep the companion running.
+
+The app advertises `_claudius._tcp`, serves WebSocket status on port **8765** (configurable), polls `claude agents --json`, and pushes usage bars from Claude OAuth credentials.
+
+### Python daemon (Linux / headless fallback)
 
 ```bash
 cd companion
@@ -50,12 +69,7 @@ python3 claudius.py --name my-laptop --secret mypassword
 
 It polls `claude agents --json` for live session state, advertises
 `_claudius._tcp` via mDNS, and pushes per-session `state` / `status` /
-`waitingFor` plus usage bars to the GeekMagic-S3. If you previously used an
-older hook-based companion, remove leftover hooks with:
-
-```bash
-python3 claudius.py --uninstall
-```
+`waitingFor` plus usage bars to the GeekMagic-S3.
 
 ## Building the firmware
 
@@ -129,7 +143,8 @@ curl -F "firmware=@build/gm_s3.bin" http://<device-name>.local/api/ota
 ```
 ├── main/                 # BSP, WiFi, mDNS, WebSocket, config HTTP, OTA
 ├── components/ui/        # Shared LVGL status dashboard (+ simulator)
-├── companion/            # Claude-only status daemon (claudius.py)
+├── companion/            # Python Claude status daemon (Linux/fallback)
+├── macos/Claudius/       # Native macOS menu-bar companion (recommended)
 ├── sim/                  # macOS SDL2 simulator
 ├── partitions.csv        # 16 MB: factory + 2× OTA + storage
 └── lv_conf.h             # Shared LVGL config

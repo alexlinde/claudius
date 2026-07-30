@@ -9,7 +9,6 @@ Usage:
     pip install websockets zeroconf
     python3 companion/claudius.py --name my-laptop
     python3 companion/claudius.py --name my-laptop --secret mypassword
-    python3 companion/claudius.py --uninstall   # remove leftover Claude hooks
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ except ImportError:
 
 
 def _import_websockets():
-    """Lazy — uninstall path must not require websockets installed."""
+    """Lazy import so startup can fail with a clear pip hint."""
     try:
         from websockets.asyncio.server import serve as ws_serve
         return ws_serve
@@ -60,7 +59,6 @@ def _import_websockets():
 
 CONFIG_HOME = os.path.expanduser(
     os.environ.get("GM_CLAUDE_CONFIG_HOME", "~/.config/gm-claude"))
-CLAUDE_SETTINGS = os.path.expanduser("~/.claude/settings.json")
 CLAUDE_CREDS = os.path.expanduser("~/.claude/.credentials.json")
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 USAGE_API = "https://claude.ai/api/oauth/usage"
@@ -616,72 +614,6 @@ def usage_thread() -> None:
         _shutdown.wait(USAGE_INTERVAL)
 
 
-# ── Legacy hook cleanup ──────────────────────────────────────────────────────
-
-def is_ours(cmd: str) -> bool:
-    return "--hook" in cmd and ("claudius" in cmd or "gm-claude" in cmd)
-
-
-def _strip_our_hooks(hooks: dict) -> None:
-    for event in list(hooks.keys()):
-        entries = hooks.get(event, [])
-        if not isinstance(entries, list):
-            continue
-        cleaned = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                cleaned.append(entry)
-                continue
-            inner = entry.get("hooks")
-            if not isinstance(inner, list):
-                if is_ours(str(entry.get("command") or "")):
-                    continue
-                cleaned.append(entry)
-                continue
-            kept = [h for h in inner
-                    if not (isinstance(h, dict) and is_ours(h.get("command", "")))]
-            if kept:
-                cleaned.append({**entry, "hooks": kept})
-        if cleaned:
-            hooks[event] = cleaned
-        else:
-            del hooks[event]
-
-
-def uninstall_hooks() -> None:
-    """Remove leftover Claude Code hooks from earlier claudius versions."""
-    path = CLAUDE_SETTINGS
-    try:
-        with open(path) as f:
-            doc = json.load(f)
-    except FileNotFoundError:
-        log("[hooks] nothing to uninstall")
-        return
-    except Exception as e:
-        log(f"[hooks] could not read {path}: {e}")
-        return
-
-    hooks = doc.get("hooks")
-    if not isinstance(hooks, dict):
-        log("[hooks] nothing to uninstall")
-        return
-
-    before = json.dumps(hooks, sort_keys=True)
-    _strip_our_hooks(hooks)
-    after = json.dumps(hooks, sort_keys=True)
-    if before == after:
-        log("[hooks] nothing to uninstall")
-        return
-
-    doc["hooks"] = hooks
-    tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
-    log(f"[hooks] removed from {path}")
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -689,31 +621,20 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description="Claude-only companion for the GeekMagic-S3 claudius screen")
-    parser.add_argument("--name", help="mDNS instance name (e.g. my-laptop)")
+    parser.add_argument("--name", required=True,
+                        help="mDNS instance name (e.g. my-laptop)")
     parser.add_argument("--secret", default="", help="optional shared HMAC secret")
     parser.add_argument("--port", type=int, default=WS_PORT_DEFAULT,
                         help=f"WebSocket port (default {WS_PORT_DEFAULT})")
     parser.add_argument("--claude", default="claude",
                         help="claude CLI binary (default: claude)")
-    parser.add_argument("--uninstall", action="store_true",
-                        help="remove leftover Claude Code hooks and exit")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
-
-    if args.uninstall:
-        uninstall_hooks()
-        return
-
-    if not args.name:
-        parser.error("--name is required (e.g. --name my-laptop)")
 
     _secret = args.secret or ""
     _verbose = args.verbose
     _claude_bin = args.claude
     os.makedirs(CONFIG_HOME, exist_ok=True)
-
-    # Drop hook-based monitoring from earlier versions so we don't double-report.
-    uninstall_hooks()
 
     log(f"claudius  [ws://0.0.0.0:{args.port}]  name={args.name}"
         + ("  (secret set)" if _secret else ""))
