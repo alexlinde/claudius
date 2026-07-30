@@ -1,5 +1,33 @@
 idf_component_register(
-    SRCS "main.c" "bsp_display.c" "bsp_touch.c"
+    SRCS
+        "main.c"
+        "bsp_display.c"
+        "bsp_touch.c"
+        "app_config.c"
+        "app_dbg.c"
+        "app_wifi.c"
+        "app_mdns.c"
+        "app_proto.c"
+        "app_ws.c"
+        "app_webcfg.c"
+        "app_ota.c"
     INCLUDE_DIRS "."
-    PRIV_REQUIRES "driver" "esp_lcd" "esp_timer" "esp_driver_ledc" "esp_driver_touch_sens" "ui" "button"
+    PRIV_REQUIRES
+        driver
+        esp_lcd
+        esp_timer
+        esp_driver_ledc
+        esp_driver_touch_sens
+        ui
+        button
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        mdns
+        esp_http_server
+        esp_https_ota
+        app_update
+        mbedtls
+        esp_websocket_client
 )

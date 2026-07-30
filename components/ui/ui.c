@@ -2,33 +2,146 @@
 #include "font_ubuntu_medium.h"
 
 #include <stdatomic.h>
-#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+#ifndef GM_S3_SIM
+#include "esp_lvgl_port.h"
+#endif
 
 /* ---------------------------------------------------------------------------
- * Encoder-style input device fed by external gesture callbacks.
- *
- * Gesture sources (device iot_button / sim key events) push events via the
- * ui_on_* functions; those only touch atomics, so they're safe from any task
- * context. LVGL's timer handler invokes our read_cb on its own thread to
- * drain those atomics into lv_indev_data_t.
+ * Layout (240×240) — mirrors codelight ESP8266 screen/src/display.cpp
  * ------------------------------------------------------------------------- */
-static _Atomic int  s_enc_diff;
-static _Atomic bool s_enc_click_pending;   /* true -> next read should PRESS */
-static bool         s_enc_click_active;    /* true -> next read should RELEASE */
+#define X_MARGIN     6
+#define Y_TITLE      2
+#define H_LABEL      16
+#define H_BAR        20
+#define Y_WMETER     22
+#define Y_WBAR       (Y_WMETER + H_LABEL + 2)   /* 40 */
+#define Y_SMETER     (Y_WBAR + H_BAR + 5)       /* 65 */
+#define Y_SBAR       (Y_SMETER + H_LABEL + 2)   /* 83 */
+#define Y_SESSIONS   (Y_SBAR + H_BAR + 4)       /* 107 */
+#define Y_DIVIDER    (Y_SESSIONS + H_LABEL + 3) /* 126 */
+#define Y_BOX        (Y_DIVIDER + 2)            /* 128 */
+#define BOX_SIZE     (240 - Y_BOX - 4)          /* 108 */
+
+#define COL_BG       0x000000
+#define COL_TITLE    0xFFFFFF
+#define COL_LABEL    0xC0C0C0
+#define COL_BAR_BG   0x212121
+#define COL_RESET    0x808080
+#define COL_GREEN    0x00C800
+#define COL_YELLOW   0xFFFF00
+#define COL_ORANGE   0xFF8C00
+#define COL_RED      0xFF2200
+#define COL_OFFLINE  0x424242
+
+#define UI_DEFAULT_BRIGHTNESS 50
+#define UI_SLEEP_BRIGHTNESS   8
+#define SLEEP_FRAME_MS        40
+#define MAX_SLEEP_SPRITES     4
+
+/* ---------------------------------------------------------------------------
+ * Encoder indev (gestures) — kept for wake / future settings
+ * ------------------------------------------------------------------------- */
+static _Atomic int s_enc_diff;
+static _Atomic bool s_enc_click_pending;
+static bool s_enc_click_active;
 
 static lv_indev_t *s_indev;
 static lv_group_t *s_group;
-static lv_obj_t   *s_slider;
-static lv_obj_t   *s_label_percent;
 
-static lv_font_t  *s_font_title;
-static lv_font_t  *s_font_value;
-static lv_font_t  *s_font_footer;
+static lv_font_t *s_font_title;
+static lv_font_t *s_font_value;
+static lv_font_t *s_font_small;
 
 static ui_brightness_cb_t s_brightness_cb;
+static int s_brightness = UI_DEFAULT_BRIGHTNESS;
 
-#define UI_DEFAULT_BRIGHTNESS 20
+static status_snapshot_t s_snap;
+static bool s_sleeping;
+static long s_utc_offset;
+static uint32_t s_last_clock_sec = UINT32_MAX;
+static uint32_t s_last_sleep_frame_ms;
+
+static agent_logo_t s_logos[MAX_AGENT_LOGOS];
+static int s_logo_count;
+
+/* Dashboard widgets */
+static lv_obj_t *s_scr;
+static lv_obj_t *s_title;
+static lv_obj_t *s_clock;
+static lv_obj_t *s_w_label;
+static lv_obj_t *s_w_reset;
+static lv_obj_t *s_w_bar;
+static lv_obj_t *s_w_pct;
+static lv_obj_t *s_s_label;
+static lv_obj_t *s_s_reset;
+static lv_obj_t *s_s_bar;
+static lv_obj_t *s_s_pct;
+static lv_obj_t *s_sessions;
+static lv_obj_t *s_divider;
+static lv_obj_t *s_status_box;
+static lv_obj_t *s_status_label;
+
+/* Sleep overlay */
+static lv_obj_t *s_sleep_layer;
+static lv_obj_t *s_sleep_clock;
+static lv_obj_t *s_sleep_logo_imgs[MAX_SLEEP_SPRITES];
+static lv_image_dsc_t s_sleep_logo_dsc[MAX_SLEEP_SPRITES];
+static uint8_t s_sleep_logo_px[MAX_SLEEP_SPRITES][LOGO_W * LOGO_H * 2];
+static float s_spr_x[MAX_SLEEP_SPRITES];
+static float s_spr_y[MAX_SLEEP_SPRITES];
+static float s_spr_vx[MAX_SLEEP_SPRITES];
+static float s_spr_vy[MAX_SLEEP_SPRITES];
+static int s_spr_count;
+static bool s_spr_is_clock[MAX_SLEEP_SPRITES];
+
+static void apply_brightness(int percent)
+{
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    s_brightness = percent;
+    if (s_brightness_cb) s_brightness_cb(percent);
+}
+
+static void lock_ui(void)
+{
+#ifndef GM_S3_SIM
+    lvgl_port_lock(0);
+#endif
+}
+
+static void unlock_ui(void)
+{
+#ifndef GM_S3_SIM
+    lvgl_port_unlock();
+#endif
+}
+
+static lv_color_t rgb(uint32_t hex)
+{
+    return lv_color_make((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF);
+}
+
+static lv_color_t usage_color(float pct)
+{
+    static const uint32_t stops[4] = { COL_GREEN, COL_YELLOW, COL_ORANGE, COL_RED };
+    static const float edges[4] = { 0.0f, 0.5f, 0.75f, 1.0f };
+    if (pct <= 0.0f) return rgb(stops[0]);
+    if (pct >= 1.0f) return rgb(stops[3]);
+    for (int i = 0; i < 3; i++) {
+        if (pct <= edges[i + 1]) {
+            float t = (pct - edges[i]) / (edges[i + 1] - edges[i]);
+            lv_color_t c0 = rgb(stops[i]);
+            lv_color_t c1 = rgb(stops[i + 1]);
+            return lv_color_mix(c1, c0, (uint8_t)(t * 255));
+        }
+    }
+    return rgb(stops[3]);
+}
 
 static void read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -36,122 +149,491 @@ static void read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     data->enc_diff = atomic_exchange(&s_enc_diff, 0);
 
     if (s_enc_click_active) {
-        /* Deliver the release half of a momentary click. */
-        data->state        = LV_INDEV_STATE_RELEASED;
+        data->state = LV_INDEV_STATE_RELEASED;
         s_enc_click_active = false;
     } else if (atomic_exchange(&s_enc_click_pending, false)) {
-        /* Deliver the press; next tick the release finishes the click. */
-        data->state        = LV_INDEV_STATE_PRESSED;
+        data->state = LV_INDEV_STATE_PRESSED;
         s_enc_click_active = true;
     } else {
-        data->state        = LV_INDEV_STATE_RELEASED;
+        data->state = LV_INDEV_STATE_RELEASED;
     }
-}
-
-static void slider_value_changed_cb(lv_event_t *e)
-{
-    (void)e;
-    int v = (int)lv_slider_get_value(s_slider);
-    lv_label_set_text_fmt(s_label_percent, "%d%%", v);
-    if (s_brightness_cb) s_brightness_cb(v);
-}
-
-static void reset_clicked_cb(lv_event_t *e)
-{
-    (void)e;
-    lv_slider_set_value(s_slider, UI_DEFAULT_BRIGHTNESS, LV_ANIM_ON);
-    /* set_value is silent; emit so our handler + any listeners react. */
-    lv_obj_send_event(s_slider, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void create_fonts(void)
 {
     if (s_font_title) return;
-    s_font_title  = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 22);
-    s_font_value  = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 44);
-    s_font_footer = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 14);
+    s_font_title = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 16);
+    s_font_value = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 22);
+    s_font_small = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 13);
+}
+
+static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, color, 0);
+    lv_label_set_text(l, "");
+    return l;
+}
+
+static lv_obj_t *make_bar(lv_obj_t *parent, int y)
+{
+    lv_obj_t *bar = lv_bar_create(parent);
+    lv_obj_set_size(bar, 240 - X_MARGIN * 2 - 34, H_BAR);
+    lv_obj_set_pos(bar, X_MARGIN, y);
+    lv_bar_set_range(bar, 0, 100);
+    lv_obj_set_style_bg_color(bar, rgb(COL_BAR_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, rgb(COL_GREEN), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
+    return bar;
+}
+
+static void set_meter_visible(bool weekly, bool visible)
+{
+    lv_obj_t *label = weekly ? s_w_label : s_s_label;
+    lv_obj_t *reset = weekly ? s_w_reset : s_s_reset;
+    lv_obj_t *bar = weekly ? s_w_bar : s_s_bar;
+    lv_obj_t *pct = weekly ? s_w_pct : s_s_pct;
+    if (visible) {
+        lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(reset, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(pct, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(reset, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(pct, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void update_meter(bool weekly, const char *title, float pct, const char *reset)
+{
+    bool show = title && title[0];
+    set_meter_visible(weekly, show);
+    if (!show) return;
+
+    lv_obj_t *label = weekly ? s_w_label : s_s_label;
+    lv_obj_t *reset_l = weekly ? s_w_reset : s_s_reset;
+    lv_obj_t *bar = weekly ? s_w_bar : s_s_bar;
+    lv_obj_t *pct_l = weekly ? s_w_pct : s_s_pct;
+
+    lv_label_set_text(label, title);
+    lv_label_set_text(reset_l, reset && reset[0] ? reset : "--");
+    int v = (int)(pct * 100.0f + 0.5f);
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    lv_bar_set_value(bar, v, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, usage_color(pct), LV_PART_INDICATOR);
+    lv_label_set_text_fmt(pct_l, "%d%%", v);
+}
+
+static void update_status_box(void)
+{
+    uint32_t color;
+    char label[64];
+
+    if (s_snap.auth_failed) {
+        color = COL_RED;
+        snprintf(label, sizeof(label), "AUTH FAIL");
+    } else if (!s_snap.connected) {
+        color = COL_OFFLINE;
+        snprintf(label, sizeof(label), "OFFLINE");
+    } else {
+        const char *state;
+        switch (s_snap.status) {
+        case AGENT_STATUS_WORKING: state = "WORKING"; color = COL_ORANGE; break;
+        case AGENT_STATUS_WAITING: state = "WAITING"; color = COL_RED; break;
+        case AGENT_STATUS_IDLE:    state = "IDLE";    color = COL_GREEN; break;
+        default:                   state = "OFFLINE"; color = COL_OFFLINE; break;
+        }
+        if (s_snap.agent_display[0]) {
+            /* Uppercase agent name + state */
+            char agent[STATUS_AGENT_LEN];
+            size_t i;
+            for (i = 0; s_snap.agent_display[i] && i + 1 < sizeof(agent); i++) {
+                char c = s_snap.agent_display[i];
+                agent[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+            }
+            agent[i] = '\0';
+            snprintf(label, sizeof(label), "%s %s", agent, state);
+        } else {
+            snprintf(label, sizeof(label), "%s", state);
+        }
+    }
+
+    lv_obj_set_style_bg_color(s_status_box, rgb(color), 0);
+    lv_obj_set_style_text_color(s_status_label, lv_color_black(), 0);
+    lv_label_set_text(s_status_label, label);
+    lv_obj_center(s_status_label);
+}
+
+static void update_sessions(void)
+{
+    if (!s_snap.connected) {
+        lv_label_set_text(s_sessions, "");
+        return;
+    }
+    lv_label_set_text_fmt(s_sessions, "%d session%s active",
+                          s_snap.sessions, s_snap.sessions == 1 ? "" : "s");
+}
+
+static void apply_snapshot_locked(void)
+{
+    if (s_sleeping) return;
+    update_meter(true, s_snap.weekly_title, s_snap.weekly_pct, s_snap.weekly_reset);
+    update_meter(false, s_snap.session_title, s_snap.session_pct, s_snap.session_reset);
+    update_sessions();
+    update_status_box();
+}
+
+static void update_clock_locked(void)
+{
+    time_t now = time(NULL);
+    if (now < 1000000000L) {
+        lv_label_set_text(s_clock, "--:--:--");
+        if (s_sleep_clock) lv_label_set_text(s_sleep_clock, "--:--");
+        return;
+    }
+    /* Apply companion utc_offset manually so we don't need tzset. */
+    time_t local = now + s_utc_offset;
+    struct tm t;
+    gmtime_r(&local, &t);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+    lv_label_set_text(s_clock, buf);
+
+    if (s_sleep_clock) {
+        snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
+        lv_label_set_text(s_sleep_clock, buf);
+    }
+}
+
+/* Convert 1-bit logo to RGB565 ARGB-ish buffer (fg on transparent black). */
+static void logo_to_rgb565(const agent_logo_t *logo, uint8_t *out_px)
+{
+    uint16_t fg = logo->color_rgb565;
+    for (int y = 0; y < LOGO_H; y++) {
+        for (int x = 0; x < LOGO_W; x++) {
+            int bit_index = y * LOGO_W + x;
+            int byte_i = bit_index / 8;
+            int bit_i = 7 - (bit_index % 8);
+            bool on = (logo->bits[byte_i] >> bit_i) & 1;
+            uint16_t c = on ? fg : 0x0000;
+            out_px[(y * LOGO_W + x) * 2] = (uint8_t)(c & 0xFF);
+            out_px[(y * LOGO_W + x) * 2 + 1] = (uint8_t)(c >> 8);
+        }
+    }
+}
+
+static float frand01(void)
+{
+    return (float)(lv_rand(0, 10000)) / 10000.0f;
+}
+
+static void sleep_reinit_sprites(void)
+{
+    s_spr_count = 0;
+    int logos = s_logo_count < 3 ? s_logo_count : 3;
+    for (int i = 0; i < logos; i++) {
+        logo_to_rgb565(&s_logos[i], s_sleep_logo_px[i]);
+        s_sleep_logo_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
+        s_sleep_logo_dsc[i].header.cf = LV_COLOR_FORMAT_RGB565;
+        s_sleep_logo_dsc[i].header.w = LOGO_W;
+        s_sleep_logo_dsc[i].header.h = LOGO_H;
+        s_sleep_logo_dsc[i].header.stride = LOGO_W * 2;
+        s_sleep_logo_dsc[i].data_size = LOGO_W * LOGO_H * 2;
+        s_sleep_logo_dsc[i].data = s_sleep_logo_px[i];
+
+        if (!s_sleep_logo_imgs[i]) {
+            s_sleep_logo_imgs[i] = lv_image_create(s_sleep_layer);
+        }
+        lv_image_set_src(s_sleep_logo_imgs[i], &s_sleep_logo_dsc[i]);
+        lv_obj_remove_flag(s_sleep_logo_imgs[i], LV_OBJ_FLAG_HIDDEN);
+        s_spr_is_clock[i] = false;
+        s_spr_x[i] = (float)lv_rand(0, 240 - LOGO_W);
+        s_spr_y[i] = (float)lv_rand(0, 240 - LOGO_H);
+        float ang = frand01() * 6.28318f;
+        float spd = 0.6f + frand01() * 1.2f;
+        s_spr_vx[i] = spd * (float)(ang < 3.14f ? 1 : -1) * (0.5f + frand01());
+        s_spr_vy[i] = spd * (0.5f + frand01()) * (frand01() > 0.5f ? 1.0f : -1.0f);
+        s_spr_count++;
+    }
+    for (int i = logos; i < MAX_SLEEP_SPRITES - 1; i++) {
+        if (s_sleep_logo_imgs[i]) lv_obj_add_flag(s_sleep_logo_imgs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* Clock sprite */
+    int ci = s_spr_count;
+    s_spr_is_clock[ci] = true;
+    s_spr_x[ci] = (float)lv_rand(20, 160);
+    s_spr_y[ci] = (float)lv_rand(20, 200);
+    s_spr_vx[ci] = 0.8f;
+    s_spr_vy[ci] = 0.6f;
+    if (!s_sleep_clock) {
+        s_sleep_clock = make_label(s_sleep_layer, s_font_value, rgb(COL_TITLE));
+    }
+    lv_obj_remove_flag(s_sleep_clock, LV_OBJ_FLAG_HIDDEN);
+    s_spr_count++;
+}
+
+static void sleep_animate(uint32_t now_ms)
+{
+    if (now_ms - s_last_sleep_frame_ms < SLEEP_FRAME_MS) return;
+    s_last_sleep_frame_ms = now_ms;
+
+    for (int i = 0; i < s_spr_count; i++) {
+        int w = s_spr_is_clock[i] ? 80 : LOGO_W;
+        int h = s_spr_is_clock[i] ? 28 : LOGO_H;
+        s_spr_x[i] += s_spr_vx[i];
+        s_spr_y[i] += s_spr_vy[i];
+        bool bounce = false;
+        if (s_spr_x[i] < 0) { s_spr_x[i] = 0; s_spr_vx[i] = -s_spr_vx[i]; bounce = true; }
+        if (s_spr_x[i] > 240 - w) { s_spr_x[i] = (float)(240 - w); s_spr_vx[i] = -s_spr_vx[i]; bounce = true; }
+        if (s_spr_y[i] < 0) { s_spr_y[i] = 0; s_spr_vy[i] = -s_spr_vy[i]; bounce = true; }
+        if (s_spr_y[i] > 240 - h) { s_spr_y[i] = (float)(240 - h); s_spr_vy[i] = -s_spr_vy[i]; bounce = true; }
+        if (bounce) {
+            float j = 0.85f + frand01() * 0.3f;
+            s_spr_vx[i] *= j;
+            s_spr_vy[i] *= (0.85f + frand01() * 0.3f);
+        }
+        if (s_spr_is_clock[i]) {
+            lv_obj_set_pos(s_sleep_clock, (int)s_spr_x[i], (int)s_spr_y[i]);
+        } else {
+            lv_obj_set_pos(s_sleep_logo_imgs[i], (int)s_spr_x[i], (int)s_spr_y[i]);
+        }
+    }
+    update_clock_locked();
 }
 
 void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
 {
     create_fonts();
-
     s_brightness_cb = brightness_cb;
+    s_scr = parent;
 
-    lv_obj_set_style_bg_color(parent, lv_color_black(), 0);
+    memset(&s_snap, 0, sizeof(s_snap));
+    s_snap.status = AGENT_STATUS_OFFLINE;
+    s_snap.connected = false;
+    snprintf(s_snap.weekly_reset, sizeof(s_snap.weekly_reset), "--");
+    snprintf(s_snap.session_reset, sizeof(s_snap.session_reset), "--");
+
+    lv_obj_set_style_bg_color(parent, rgb(COL_BG), 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(parent, 10, 0);
-    lv_obj_set_style_pad_row(parent, 8, 0);
+    lv_obj_set_style_pad_all(parent, 0, 0);
+    lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(parent,
-                          LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    s_title = make_label(parent, s_font_title, rgb(COL_TITLE));
+    lv_label_set_text(s_title, "codelight");
+    lv_obj_set_pos(s_title, X_MARGIN, Y_TITLE);
 
-    /* Title ---------------------------------------------------------------- */
-    lv_obj_t *title = lv_label_create(parent);
-    lv_label_set_text(title, "Brightness");
-    lv_obj_set_style_text_font(title, s_font_title, 0);
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    s_clock = make_label(parent, s_font_small, rgb(COL_TITLE));
+    lv_obj_align(s_clock, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_TITLE + 2);
 
-    /* Big percent readout -------------------------------------------------- */
-    s_label_percent = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_label_percent, s_font_value, 0);
-    lv_obj_set_style_text_color(s_label_percent, lv_color_white(), 0);
-    lv_label_set_text_fmt(s_label_percent, "%d%%", UI_DEFAULT_BRIGHTNESS);
+    s_w_label = make_label(parent, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_pos(s_w_label, X_MARGIN, Y_WMETER);
+    s_w_reset = make_label(parent, s_font_small, rgb(COL_RESET));
+    lv_obj_align(s_w_reset, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_WMETER);
+    s_w_bar = make_bar(parent, Y_WBAR);
+    s_w_pct = make_label(parent, s_font_small, rgb(COL_TITLE));
+    lv_obj_align(s_w_pct, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_WBAR + 2);
 
-    /* Slider (focusable, editable) ---------------------------------------- */
-    s_slider = lv_slider_create(parent);
-    lv_obj_set_width(s_slider, 200);
-    lv_slider_set_range(s_slider, 0, 100);
-    lv_slider_set_value(s_slider, UI_DEFAULT_BRIGHTNESS, LV_ANIM_OFF);
-    lv_obj_add_event_cb(s_slider, slider_value_changed_cb,
-                        LV_EVENT_VALUE_CHANGED, NULL);
+    s_s_label = make_label(parent, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_pos(s_s_label, X_MARGIN, Y_SMETER);
+    s_s_reset = make_label(parent, s_font_small, rgb(COL_RESET));
+    lv_obj_align(s_s_reset, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_SMETER);
+    s_s_bar = make_bar(parent, Y_SBAR);
+    s_s_pct = make_label(parent, s_font_small, rgb(COL_TITLE));
+    lv_obj_align(s_s_pct, LV_ALIGN_TOP_RIGHT, -X_MARGIN, Y_SBAR + 2);
 
-    /* Reset button (focusable, clickable) --------------------------------- */
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_style_pad_hor(btn, 16, 0);
-    lv_obj_set_style_pad_ver(btn, 6,  0);
-    lv_obj_t *btn_label = lv_label_create(btn);
-    lv_label_set_text_fmt(btn_label, "Reset %d%%", UI_DEFAULT_BRIGHTNESS);
-    lv_obj_set_style_text_font(btn_label, s_font_footer, 0);
-    lv_obj_add_event_cb(btn, reset_clicked_cb, LV_EVENT_CLICKED, NULL);
+    s_sessions = make_label(parent, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_pos(s_sessions, X_MARGIN, Y_SESSIONS);
 
-    /* Focus group + encoder indev. LVGL cycles NEXT/PREV on enc_diff, and
-     * an ENTER click toggles edit mode on editable widgets (slider) or
-     * fires CLICKED on non-editable focusable widgets (button). */
+    s_divider = lv_obj_create(parent);
+    lv_obj_set_size(s_divider, 240, 1);
+    lv_obj_set_pos(s_divider, 0, Y_DIVIDER);
+    lv_obj_set_style_bg_color(s_divider, rgb(COL_BAR_BG), 0);
+    lv_obj_set_style_bg_opa(s_divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_divider, 0, 0);
+    lv_obj_set_style_pad_all(s_divider, 0, 0);
+    lv_obj_remove_flag(s_divider, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_status_box = lv_obj_create(parent);
+    lv_obj_set_size(s_status_box, 240, BOX_SIZE);
+    lv_obj_set_pos(s_status_box, 0, Y_BOX);
+    lv_obj_set_style_bg_color(s_status_box, rgb(COL_OFFLINE), 0);
+    lv_obj_set_style_bg_opa(s_status_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_status_box, 0, 0);
+    lv_obj_set_style_radius(s_status_box, 0, 0);
+    lv_obj_set_style_pad_all(s_status_box, 0, 0);
+    lv_obj_remove_flag(s_status_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_status_label = make_label(s_status_box, s_font_value, lv_color_black());
+    lv_label_set_text(s_status_label, "OFFLINE");
+    lv_obj_center(s_status_label);
+
+    /* Sleep overlay (hidden) */
+    s_sleep_layer = lv_obj_create(parent);
+    lv_obj_set_size(s_sleep_layer, 240, 240);
+    lv_obj_set_pos(s_sleep_layer, 0, 0);
+    lv_obj_set_style_bg_color(s_sleep_layer, rgb(COL_BG), 0);
+    lv_obj_set_style_bg_opa(s_sleep_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_sleep_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_sleep_layer, 0, 0);
+    lv_obj_remove_flag(s_sleep_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
+
     s_group = lv_group_create();
-    lv_group_add_obj(s_group, s_slider);
-    lv_group_add_obj(s_group, btn);
     lv_group_set_default(s_group);
-
     s_indev = lv_indev_create();
     lv_indev_set_type(s_indev, LV_INDEV_TYPE_ENCODER);
     lv_indev_set_read_cb(s_indev, read_cb);
     lv_indev_set_group(s_indev, s_group);
 
-    /* Sync backlight to the initial slider value. This runs under the LVGL
-     * port lock, so we can't force a synchronous flush here (would deadlock
-     * against the esp_lvgl_port task) - the first real frame lands on the
-     * panel within a tick of releasing the lock, and the brief moment
-     * between backlight-on and first-flush is not visible in practice. */
-    if (s_brightness_cb) s_brightness_cb((int)lv_slider_get_value(s_slider));
+    set_meter_visible(true, false);
+    set_meter_visible(false, false);
+    apply_snapshot_locked();
+    update_clock_locked();
+    apply_brightness(UI_DEFAULT_BRIGHTNESS);
+}
+
+void ui_set_status(const status_snapshot_t *snap)
+{
+    if (!snap) return;
+    lock_ui();
+    s_snap = *snap;
+    apply_snapshot_locked();
+    unlock_ui();
+}
+
+void ui_set_connected(bool connected)
+{
+    lock_ui();
+    s_snap.connected = connected;
+    if (!connected) s_snap.auth_failed = false;
+    apply_snapshot_locked();
+    unlock_ui();
+}
+
+void ui_set_auth_failed(bool failed)
+{
+    lock_ui();
+    s_snap.auth_failed = failed;
+    if (failed) {
+        s_snap.connected = false;
+        s_snap.status = AGENT_STATUS_AUTH_FAILED;
+    }
+    apply_snapshot_locked();
+    unlock_ui();
+}
+
+void ui_set_agent_logos(const agent_logo_t *logos, int count)
+{
+    lock_ui();
+    s_logo_count = 0;
+    if (logos && count > 0) {
+        if (count > MAX_AGENT_LOGOS) count = MAX_AGENT_LOGOS;
+        memcpy(s_logos, logos, (size_t)count * sizeof(agent_logo_t));
+        s_logo_count = count;
+    }
+    unlock_ui();
+}
+
+void ui_set_utc_offset(long offset_sec)
+{
+    lock_ui();
+    s_utc_offset = offset_sec;
+    update_clock_locked();
+    unlock_ui();
+}
+
+void ui_sleep_start(void)
+{
+    lock_ui();
+    if (s_sleeping) {
+        unlock_ui();
+        return;
+    }
+    s_sleeping = true;
+    lv_obj_remove_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_sleep_layer);
+    sleep_reinit_sprites();
+    apply_brightness(UI_SLEEP_BRIGHTNESS);
+    unlock_ui();
+}
+
+void ui_wake(void)
+{
+    lock_ui();
+    if (!s_sleeping) {
+        unlock_ui();
+        return;
+    }
+    s_sleeping = false;
+    lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
+    apply_brightness(UI_DEFAULT_BRIGHTNESS);
+    apply_snapshot_locked();
+    update_clock_locked();
+    unlock_ui();
+}
+
+bool ui_is_sleeping(void)
+{
+    return s_sleeping;
+}
+
+void ui_tick(uint32_t now_ms)
+{
+    lock_ui();
+    time_t now = time(NULL);
+    if ((uint32_t)now != s_last_clock_sec) {
+        s_last_clock_sec = (uint32_t)now;
+        if (!s_sleeping) update_clock_locked();
+    }
+    if (s_sleeping) sleep_animate(now_ms);
+    unlock_ui();
 }
 
 void ui_on_tap(void)
 {
+    if (s_sleeping) {
+        ui_wake();
+        return;
+    }
     atomic_fetch_add(&s_enc_diff, +1);
 }
 
 void ui_on_tap_burst(int count)
 {
-    if (count == 2)       atomic_fetch_add(&s_enc_diff, -1);
-    else if (count == 3)  atomic_fetch_add(&s_enc_diff, +3);
-    else if (count >= 4)  atomic_fetch_add(&s_enc_diff, +1);
+    if (s_sleeping) {
+        ui_wake();
+        return;
+    }
+    if (count == 2) atomic_fetch_add(&s_enc_diff, -1);
+    else if (count == 3) atomic_fetch_add(&s_enc_diff, +3);
+    else if (count >= 4) atomic_fetch_add(&s_enc_diff, +1);
 }
 
 void ui_on_long_press(void)
 {
+    if (s_sleeping) {
+        ui_wake();
+        return;
+    }
     atomic_store(&s_enc_click_pending, true);
+}
+
+int ui_get_brightness(void)
+{
+    return s_brightness;
+}
+
+void ui_set_brightness(int percent)
+{
+    lock_ui();
+    apply_brightness(percent);
+    unlock_ui();
 }

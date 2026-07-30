@@ -1,38 +1,51 @@
 #pragma once
 
 #include "lvgl.h"
+#include "status.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Sink for brightness-slider changes. Invoked from LVGL context with
- * percent in [0, 100]. May be NULL. */
+/* Optional backlight sink (percent 0..100). May be NULL. */
 typedef void (*ui_brightness_cb_t)(int percent);
 
-/* Build the screen, focus group, and the encoder-style input device that the
- * gesture callbacks below feed. brightness_cb (if non-NULL) is called once
- * with the initial slider value and then on every slider change. */
+/* Build the status dashboard. brightness_cb is invoked when the UI dims
+ * for sleep or restores on wake (and once at init with the default level). */
 void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb);
 
-/* Gesture entry points. Safe to call from any task context - they only
- * mutate atomics that LVGL's own timer handler drains via the indev
- * read_cb, so no lvgl_port_lock() is required on the caller's side.
- *
- * Mapping onto LVGL's encoder/group model:
- *   ui_on_tap()            -> encoder diff +1
- *                             (nav: focus next; edit: value +1)
- *   ui_on_tap_burst(2)     -> encoder diff -1
- *                             (nav: focus prev; edit: value -1)
- *   ui_on_tap_burst(3)     -> encoder diff +3 (catches up two held-back taps
- *                             so a rapid triple fast-forwards the value)
- *   ui_on_tap_burst(N>=4)  -> encoder diff +1 per tap (live scrub)
- *   ui_on_long_press()     -> momentary ENTER click
- *                             (nav: enter edit mode on editables; also
- *                              fires CLICKED on buttons) */
+/* Apply a full status snapshot. Safe to call from any task; internally
+ * marshals onto the LVGL thread when built for firmware. */
+void ui_set_status(const status_snapshot_t *snap);
+
+/* Connection helpers that mutate only connection-related fields. */
+void ui_set_connected(bool connected);
+void ui_set_auth_failed(bool failed);
+
+/* Replace the agent logo set used by the screensaver (up to MAX_AGENT_LOGOS). */
+void ui_set_agent_logos(const agent_logo_t *logos, int count);
+
+/* Timezone offset in seconds east of UTC (from companion config). */
+void ui_set_utc_offset(long offset_sec);
+
+/* Screensaver control. */
+void ui_sleep_start(void);
+void ui_wake(void);
+bool ui_is_sleeping(void);
+
+/* Tick the sleep animation / clock. Call ~every frame from the main loop
+ * (or from an LVGL timer). now_ms is a monotonic millisecond clock. */
+void ui_tick(uint32_t now_ms);
+
+/* Gesture entry points (same semantics as the brightness demo).
+ * Tap while sleeping wakes the dashboard. */
 void ui_on_tap(void);
 void ui_on_tap_burst(int count);
 void ui_on_long_press(void);
+
+/* Default / current brightness percent the UI last requested. */
+int ui_get_brightness(void);
+void ui_set_brightness(int percent);
 
 #ifdef __cplusplus
 }
