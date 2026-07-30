@@ -14,6 +14,9 @@ typedef void (*ui_brightness_cb_t)(int percent);
  * for sleep or restores on wake (and once at init with the default level). */
 void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb);
 
+/* Top-left title from the configured device name. Safe to call from any task. */
+void ui_set_title(const char *device_name);
+
 /* Apply a full status snapshot. Safe to call from any task; internally
  * marshals onto the LVGL thread when built for firmware. */
 void ui_set_status(const status_snapshot_t *snap);

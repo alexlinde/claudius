@@ -98,6 +98,7 @@ void app_main(void)
     lvgl_port_lock(0);
     ui_init(lv_screen_active(), brightness_cb);
     lvgl_port_unlock();
+    ui_set_title(g_cfg.device_name);
     ui_set_brightness(g_cfg.brightness);
 
     app_dbg_log("boot: wifi…");

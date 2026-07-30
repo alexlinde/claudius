@@ -128,6 +128,7 @@ int main(void)
     lv_sdl_mouse_create();
 
     ui_init(lv_screen_active(), sim_brightness_cb);
+    ui_set_title("claudius");
     ui_set_utc_offset(-7 * 3600); /* PT for local testing */
 
     status_snapshot_t initial;
