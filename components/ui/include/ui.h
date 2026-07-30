@@ -43,7 +43,8 @@ void ui_on_tap(void);
 void ui_on_tap_burst(int count);
 void ui_on_long_press(void);
 
-/* Default / current brightness percent the UI last requested. */
+/* Preferred brightness percent (1..100). Sleep dims separately and restores
+ * this level on wake. Safe to call from any task. */
 int ui_get_brightness(void);
 void ui_set_brightness(int percent);
 

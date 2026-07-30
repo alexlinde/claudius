@@ -18,6 +18,7 @@ void app_config_set_defaults(void)
     snprintf(g_cfg.device_name, sizeof(g_cfg.device_name), "claudius");
     g_cfg.sleep_on_disconnect = true;
     g_cfg.sleep_on_idle = true;
+    g_cfg.brightness = 50;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *out, size_t out_len)
@@ -39,6 +40,12 @@ static esp_err_t load_from_handle(nvs_handle_t h)
     if (nvs_get_u8(h, "sleep_disc", &u8) == ESP_OK) g_cfg.sleep_on_disconnect = u8 != 0;
     u8 = 1;
     if (nvs_get_u8(h, "sleep_idle", &u8) == ESP_OK) g_cfg.sleep_on_idle = u8 != 0;
+    u8 = 50;
+    if (nvs_get_u8(h, "brightness", &u8) == ESP_OK) {
+        if (u8 < 1) u8 = 1;
+        if (u8 > 100) u8 = 100;
+        g_cfg.brightness = u8;
+    }
 
     uint8_t count = 0;
     if (nvs_get_u8(h, "wifi_count", &count) == ESP_OK && count > APP_MAX_WIFI_NETWORKS) {
@@ -103,6 +110,7 @@ esp_err_t app_config_save(void)
     nvs_set_str(h, "comp_secret", g_cfg.companion_secret);
     nvs_set_u8(h, "sleep_disc", g_cfg.sleep_on_disconnect ? 1 : 0);
     nvs_set_u8(h, "sleep_idle", g_cfg.sleep_on_idle ? 1 : 0);
+    nvs_set_u8(h, "brightness", g_cfg.brightness);
 
     if (g_cfg.wifi_count > APP_MAX_WIFI_NETWORKS) {
         g_cfg.wifi_count = APP_MAX_WIFI_NETWORKS;

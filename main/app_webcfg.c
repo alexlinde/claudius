@@ -36,6 +36,9 @@ static const char INDEX_HTML[] =
 "#add-net{background:none;border:1px dashed #30363d;color:#58a6ff;padding:.4rem .8rem;border-radius:6px;cursor:pointer;font-size:.85rem;width:100%;margin-top:.2rem}"
 "button[type=submit]{background:#238636;border:none;color:#fff;padding:.55rem 1.2rem;border-radius:6px;cursor:pointer;font-size:.9rem;margin-top:.8rem}"
 ".chk{display:flex;align-items:center;gap:.5rem;color:#c9d1d9;font-size:.85rem;margin-bottom:.4rem;cursor:pointer}"
+".range-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.7rem}"
+".range-row input[type=range]{flex:1;accent-color:#58a6ff}"
+".range-row span{min-width:2.6rem;text-align:right;font-size:.85rem;color:#c9d1d9}"
 "#fw{display:flex;gap:.5rem;align-items:center;margin-bottom:.4rem}"
 "#fw input[type=file]{flex:1;color:#8b949e;font-size:.8rem}"
 "#fw button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:.45rem .8rem;cursor:pointer}"
@@ -56,6 +59,9 @@ static const char INDEX_HTML[] =
 "<input type=\"password\" id=\"companionSecret\" placeholder=\"(leave blank to keep)\">"
 "<label class=\"chk\"><input type=\"checkbox\" id=\"clearSecret\"> Clear secret</label>"
 "<h2>Display</h2>"
+"<label>Brightness</label>"
+"<div class=\"range-row\"><input type=\"range\" id=\"brightness\" min=\"1\" max=\"100\" value=\"50\">"
+"<span id=\"brightnessVal\">50%</span></div>"
 "<label class=\"chk\"><input type=\"checkbox\" id=\"sleepOnDisconnect\"> Sleep after 10 min disconnected</label>"
 "<label class=\"chk\"><input type=\"checkbox\" id=\"sleepOnIdle\"> Sleep after 1 h idle</label>"
 "<h2>WiFi networks (up to 3)</h2>"
@@ -71,6 +77,10 @@ static const char INDEX_HTML[] =
 "<a class=\"ota\" href=\"/debug\">Debug log →</a>"
 "<script>"
 "const list=document.getElementById('wifi-list');"
+"const bright=document.getElementById('brightness');"
+"const brightVal=document.getElementById('brightnessVal');"
+"function setBright(v){bright.value=v;brightVal.textContent=v+'%';}"
+"bright.oninput=()=>setBright(bright.value);"
 "function esc(s){return s.replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;');}"
 "function addNet(ssid='',pw=''){"
 "  const row=document.createElement('div');row.className='net-row';"
@@ -82,6 +92,7 @@ static const char INDEX_HTML[] =
 "fetch('/api/config').then(r=>r.json()).then(cfg=>{"
 "  deviceName.value=cfg.deviceName||'';companionName.value=cfg.companionName||'';"
 "  companionHost.value=cfg.companionHost||'';"
+"  setBright(Math.min(100,Math.max(1,cfg.brightness|0||50)));"
 "  sleepOnDisconnect.checked=cfg.sleepOnDisconnect!==false;"
 "  sleepOnIdle.checked=cfg.sleepOnIdle!==false;"
 "  companionSecret.placeholder=cfg.hasSecret?'(set — leave blank to keep)':'leave blank';"
@@ -98,6 +109,7 @@ static const char INDEX_HTML[] =
 "    companionHost:companionHost.value.trim(),"
 "    companionSecret:clearSecret.checked?'':companionSecret.value,"
 "    clearSecret:clearSecret.checked,"
+"    brightness:+brightness.value,"
 "    sleepOnDisconnect:sleepOnDisconnect.checked,sleepOnIdle:sleepOnIdle.checked,wifi"
 "  };"
 "  try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
@@ -177,6 +189,7 @@ static esp_err_t api_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(doc, "companionName", g_cfg.companion_name);
     cJSON_AddStringToObject(doc, "companionHost", g_cfg.companion_host);
     cJSON_AddBoolToObject(doc, "hasSecret", g_cfg.companion_secret[0] != '\0');
+    cJSON_AddNumberToObject(doc, "brightness", g_cfg.brightness);
     cJSON_AddBoolToObject(doc, "sleepOnDisconnect", g_cfg.sleep_on_disconnect);
     cJSON_AddBoolToObject(doc, "sleepOnIdle", g_cfg.sleep_on_idle);
     cJSON *wifi = cJSON_AddArrayToObject(doc, "wifi");
@@ -239,6 +252,12 @@ static esp_err_t api_config_post(httpd_req_t *req)
         snprintf(g_cfg.companion_secret, sizeof(g_cfg.companion_secret), "%s", v->valuestring);
     }
 
+    if ((v = cJSON_GetObjectItem(doc, "brightness")) && cJSON_IsNumber(v)) {
+        int b = v->valueint;
+        if (b < 1) b = 1;
+        if (b > 100) b = 100;
+        g_cfg.brightness = (uint8_t)b;
+    }
     if ((v = cJSON_GetObjectItem(doc, "sleepOnDisconnect"))) {
         g_cfg.sleep_on_disconnect = cJSON_IsTrue(v);
     }

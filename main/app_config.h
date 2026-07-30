@@ -29,6 +29,7 @@ typedef struct {
     char companion_secret[APP_SECRET_LEN];
     bool sleep_on_disconnect;
     bool sleep_on_idle;
+    uint8_t brightness; /* backlight percent 1..100 */
 } app_config_t;
 
 extern app_config_t g_cfg;

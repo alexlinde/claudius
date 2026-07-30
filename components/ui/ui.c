@@ -58,7 +58,8 @@ static lv_font_t *s_font_value;
 static lv_font_t *s_font_small;
 
 static ui_brightness_cb_t s_brightness_cb;
-static int s_brightness = UI_DEFAULT_BRIGHTNESS;
+static int s_user_brightness = UI_DEFAULT_BRIGHTNESS; /* preferred level (not sleep) */
+static int s_brightness = UI_DEFAULT_BRIGHTNESS;      /* currently applied */
 
 static status_snapshot_t s_snap;
 static bool s_sleeping;
@@ -497,7 +498,7 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     set_meter_visible(false, false);
     apply_snapshot_locked();
     update_clock_locked();
-    apply_brightness(UI_DEFAULT_BRIGHTNESS);
+    apply_brightness(s_user_brightness);
 }
 
 void ui_set_status(const status_snapshot_t *snap)
@@ -574,7 +575,7 @@ void ui_wake(void)
     }
     s_sleeping = false;
     lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
-    apply_brightness(UI_DEFAULT_BRIGHTNESS);
+    apply_brightness(s_user_brightness);
     apply_snapshot_locked();
     update_clock_locked();
     unlock_ui();
@@ -628,12 +629,15 @@ void ui_on_long_press(void)
 
 int ui_get_brightness(void)
 {
-    return s_brightness;
+    return s_user_brightness;
 }
 
 void ui_set_brightness(int percent)
 {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
     lock_ui();
-    apply_brightness(percent);
+    s_user_brightness = percent;
+    if (!s_sleeping) apply_brightness(percent);
     unlock_ui();
 }
