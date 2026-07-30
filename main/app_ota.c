@@ -2,9 +2,7 @@
 #include "app_dbg.h"
 
 #include <string.h>
-#include "esp_app_format.h"
 #include "esp_http_server.h"
-#include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -31,7 +29,6 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     bool started = false;
     int remaining = req->content_len;
     char buf[1024];
-    int header_skip = -1; /* multipart: skip until binary; -1 = detect */
 
     /* Simple path: raw .bin body. Also tolerate multipart by finding the
      * first 0xE9 image magic after headers. */
@@ -40,7 +37,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         int got = httpd_req_recv(req, buf, to_read);
         if (got <= 0) {
             if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            esp_ota_abort(ota);
+            if (started) esp_ota_abort(ota);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
             return ESP_FAIL;
         }
@@ -60,7 +57,6 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
             }
             if (magic_at < 0) {
                 /* Still in multipart headers */
-                (void)header_skip;
                 continue;
             }
             payload = buf + magic_at;

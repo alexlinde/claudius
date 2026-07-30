@@ -20,7 +20,7 @@ static void sanitise_hostname(const char *in, char *out, size_t out_len)
         else if (c == '-' || c == ' ') out[j++] = '-';
     }
     out[j] = '\0';
-    if (j == 0) snprintf(out, out_len, "codelight-screen");
+    if (j == 0) snprintf(out, out_len, "claudius");
 }
 
 esp_err_t app_mdns_start(void)
@@ -47,9 +47,9 @@ bool app_mdns_discover_companion(char *ip_out, size_t ip_len, uint16_t *port_out
     if (!ip_out || !port_out) return false;
 
     mdns_result_t *results = NULL;
-    esp_err_t err = mdns_query_ptr("_codelight", "_tcp", timeout_ms, 8, &results);
+    esp_err_t err = mdns_query_ptr("_claudius", "_tcp", timeout_ms, 8, &results);
     if (err != ESP_OK || !results) {
-        app_dbg_log("mdns: no _codelight._tcp");
+        app_dbg_log("mdns: no _claudius._tcp");
         return false;
     }
 
@@ -60,18 +60,36 @@ bool app_mdns_discover_companion(char *ip_out, size_t ip_len, uint16_t *port_out
 
         if (g_cfg.companion_name[0]) {
             /* Compare instance name (without .local). */
-            char want[64];
-            snprintf(want, sizeof(want), "%s", g_cfg.companion_name);
-            if (strcasecmp(inst, want) != 0) continue;
+            if (strcasecmp(inst, g_cfg.companion_name) != 0) {
+                app_dbg_log("mdns: skip %s (want %s)", inst, g_cfg.companion_name);
+                continue;
+            }
         }
 
-        if (r->addr) {
-            if (r->addr->addr.type == ESP_IPADDR_TYPE_V4) {
-                snprintf(ip_out, ip_len, IPSTR, IP2STR(&r->addr->addr.u_addr.ip4));
-                *port_out = r->port ? r->port : 8765;
+        *port_out = r->port ? r->port : 8765;
+
+        /* Prefer an IPv4 from the PTR result's address list. */
+        for (mdns_ip_addr_t *a = r->addr; a; a = a->next) {
+            if (a->addr.type == ESP_IPADDR_TYPE_V4) {
+                snprintf(ip_out, ip_len, IPSTR, IP2STR(&a->addr.u_addr.ip4));
                 found = true;
                 break;
             }
+        }
+        if (found) break;
+
+        /* Fall back: resolve SRV hostname (or instance name) via A query. */
+        const char *host = r->hostname && r->hostname[0] ? r->hostname : inst;
+        if (host && host[0]) {
+            esp_ip4_addr_t ip4 = {0};
+            if (mdns_query_a(host, 1500, &ip4) == ESP_OK) {
+                snprintf(ip_out, ip_len, IPSTR, IP2STR(&ip4));
+                found = true;
+                break;
+            }
+            app_dbg_log("mdns: no A for %s", host);
+        } else {
+            app_dbg_log("mdns: %s has no address", inst);
         }
     }
 

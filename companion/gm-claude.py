@@ -3,7 +3,7 @@
 gm-claude.py — minimal Claude Code companion for the GeekMagic-S3 screen.
 
 Talks the same WebSocket protocol as henrikekblad/codelight's screen client:
-  mDNS `_codelight._tcp` → ws://host:8765 → challenge/HMAC → subscribe →
+  mDNS `_claudius._tcp` → ws://host:8765 → challenge/HMAC → subscribe →
   config + untyped status frames (working/waiting/idle + usage bars).
 
 Claude-only. No remote control, multi-agent, D-Bus, or conversation feed.
@@ -78,7 +78,7 @@ AGENT_ID = "claude"
 AGENT_DISPLAY = "Claude"
 AGENT_COLOR = "#DE7356"
 
-# 48×48 1-bit Claude logo (same bitmap codelight ships for the ESP screen).
+# 48×48 1-bit Claude logo (same bitmap layout as upstream codelight screens).
 LOGO_BITMAP = (
     "AAAAAAAAAAYAAAAAAA+AGAAAAA+APAAAAA/APAAAAA/AOAAAAAfAOAcAAAfgOA8AAAPgOB+"
     "AAAPweB8AB4HweD8AB8D4cH4AB+D4cP4AB/B8cfwAAfx8c/gAAP4+c/gAAD8eZ/AAAB/ef"
@@ -298,21 +298,47 @@ def client_config() -> dict[str, Any]:
 
 # ── Broadcast ────────────────────────────────────────────────────────────────
 
+_last_broadcast_key: str = ""
+_last_broadcast_mono: float = 0.0
+_BROADCAST_MIN_INTERVAL = 1.0  # seconds — ESP client can't absorb a flood
+
+
+def _status_key(payload: dict[str, Any]) -> str:
+    """Stable key ignoring countdown strings that change every second."""
+    return (
+        f"{payload.get('status')}|{payload.get('sessions')}|"
+        f"{payload.get('session_pct')}|{payload.get('weekly_pct')}"
+    )
+
+
 def broadcast_status() -> None:
-    global _ws_loop
+    global _ws_loop, _last_broadcast_key, _last_broadcast_mono
     payload = status_snapshot()
+    key = _status_key(payload)
+    now = time.monotonic()
+    if key == _last_broadcast_key and (now - _last_broadcast_mono) < 5.0:
+        return
+    if (now - _last_broadcast_mono) < _BROADCAST_MIN_INTERVAL:
+        return
+    _last_broadcast_key = key
+    _last_broadcast_mono = now
     msg = json.dumps(payload)
-    log(f"[status] {payload['status']} sessions={payload['sessions']} "
+
+    log(f"[status] {payload.get('status')} sessions={payload['sessions']} "
         f"session={payload['session_pct']:.0%} weekly={payload['weekly_pct']:.0%}")
     loop = _ws_loop
     if loop is None or not _clients:
         return
 
     async def _send_all() -> None:
-        await asyncio.gather(
-            *[c.send(msg) for c in list(_clients)],
-            return_exceptions=True,
-        )
+        dead = []
+        for c in list(_clients):
+            try:
+                await c.send(msg)
+            except Exception:
+                dead.append(c)
+        for c in dead:
+            _clients.discard(c)
 
     asyncio.run_coroutine_threadsafe(_send_all(), loop)
 
@@ -367,9 +393,9 @@ async def _handle_client(ws, path=None) -> None:  # path unused (websockets <13)
     _clients.add(ws)
     log(f"[ws] client connected ({len(_clients)} total)")
     try:
-        # Immediate status so the screen paints before subscribe.
-        await ws.send(json.dumps(status_snapshot()))
-
+        # Do not send immediately after the handshake — the ESP32 websocket
+        # client can still be finishing upgrade parsing and will fail the
+        # connect if a data frame arrives too early.
         async for raw in ws:
             try:
                 message = json.loads(raw)
@@ -400,7 +426,12 @@ async def _ws_main(port: int) -> None:
     ws_serve = _import_websockets()
     _ws_loop = asyncio.get_running_loop()
     last_status = "idle"
-    async with ws_serve(_handle_client, "0.0.0.0", port):
+    # compression=None: ESP32 websocket client mishandles permessage-deflate.
+    # Keep server pings so half-open ESP sockets get pruned.
+    async with ws_serve(
+        _handle_client, "0.0.0.0", port,
+        compression=None, ping_interval=20, ping_timeout=20,
+    ):
         log(f"[ws] listening on :{port}")
         while not _shutdown.is_set():
             await asyncio.sleep(2)
@@ -468,12 +499,16 @@ def mdns_thread(port: int, name: str) -> None:
                 pass
             try:
                 zc = Zeroconf(interfaces=[ip])
+                # Explicit server= so A records use name.local, not the full
+                # service name (…_claudius._tcp.local) which ESP-IDF often
+                # fails to attach as an address on PTR results.
                 info = ServiceInfo(
-                    "_codelight._tcp.local.",
-                    f"{name}._codelight._tcp.local.",
+                    "_claudius._tcp.local.",
+                    f"{name}._claudius._tcp.local.",
                     addresses=[socket.inet_aton(ip)],
                     port=port,
                     properties={},
+                    server=f"{name}.local.",
                 )
                 zc.register_service(info)
                 current_ip = ip
@@ -739,7 +774,7 @@ def main() -> None:
     global _secret, _verbose
 
     parser = argparse.ArgumentParser(
-        description="Claude-only companion for the GeekMagic-S3 codelight screen")
+        description="Claude-only companion for the GeekMagic-S3 claudius screen")
     parser.add_argument("--name", help="mDNS instance name (e.g. my-laptop)")
     parser.add_argument("--secret", default="", help="optional shared HMAC secret")
     parser.add_argument("--port", type=int, default=WS_PORT_DEFAULT,
@@ -769,7 +804,7 @@ def main() -> None:
 
     install_hooks()
 
-    log(f"gm-claude  [ws://0.0.0.0:{args.port}]  name={args.name}"
+    log(f"claudius  [ws://0.0.0.0:{args.port}]  name={args.name}"
         + ("  (secret set)" if _secret else ""))
     log("Ctrl-C to stop")
 

@@ -12,7 +12,7 @@
 #endif
 
 /* ---------------------------------------------------------------------------
- * Layout (240×240) — mirrors codelight ESP8266 screen/src/display.cpp
+ * Layout (240×240) — inspired by codelight ESP8266 screen/src/display.cpp
  * ------------------------------------------------------------------------- */
 #define X_MARGIN     6
 #define Y_TITLE      2
@@ -427,7 +427,7 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
     s_title = make_label(parent, s_font_title, rgb(COL_TITLE));
-    lv_label_set_text(s_title, "codelight");
+    lv_label_set_text(s_title, "claudius");
     lv_obj_set_pos(s_title, X_MARGIN, Y_TITLE);
 
     s_clock = make_label(parent, s_font_small, rgb(COL_TITLE));

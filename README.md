@@ -1,12 +1,13 @@
-# gm-claude (GeekMagic-S3 codelight screen)
+# gm-claude (GeekMagic-S3 claudius screen)
 
 ESP-IDF v6.0 firmware for the **GeekMagic-S3** (ESP32-S3, ST7789 240×240, capacitive
-touch) that renders live coding-agent status from the
-[codelight](https://github.com/henrikekblad/codelight) companion daemon — the S3
-equivalent of codelight’s ESP8266 `screen/` firmware.
+touch) that renders live Claude Code status on a desk display — **claudius**.
+
+Protocol and layout are inspired by
+[codelight](https://github.com/henrikekblad/codelight)’s ESP8266 `screen/` firmware.
 
 The device is a WebSocket client: it discovers the companion via mDNS
-(`_codelight._tcp`) or a configured host, subscribes as `client: screen`, and
+(`_claudius._tcp`) or a configured host, subscribes as `client: screen`, and
 shows usage bars plus WORKING / WAITING / IDLE on the 240×240 display.
 
 ## Hardware
@@ -22,23 +23,19 @@ shows usage bars plus WORKING / WAITING / IDLE on the 240×240 display.
 ## Architecture
 
 ```
-Claude Code / other agents
+Claude Code
         │ hooks
         ▼
-codelight.py companion (:8765, mDNS)
+gm-claude.py companion (:8765, mDNS _claudius._tcp)
         │ WebSocket push
         ▼
-GeekMagic-S3 firmware (this repo)
+GeekMagic-S3 firmware (claudius)
   WiFi → mDNS/host → WS auth → LVGL status UI
 ```
 
-Agent detection stays in the upstream companion — this project only implements
-the desk-screen client.
-
 ## Companion (Claude status → screen)
 
-A minimal Claude-only daemon lives in this repo and speaks the same WebSocket
-protocol as [codelight](https://github.com/henrikekblad/codelight)’s screen client:
+A minimal Claude-only daemon lives in this repo:
 
 ```bash
 cd companion
@@ -51,16 +48,12 @@ python3 gm-claude.py --name my-laptop --secret mypassword
 ```
 
 It installs Claude Code hooks into `~/.claude/settings.json`, advertises
-`_codelight._tcp` via mDNS, and pushes WORKING / WAITING / IDLE plus usage
+`_claudius._tcp` via mDNS, and pushes WORKING / WAITING / IDLE plus usage
 bars to the GeekMagic-S3. Remove hooks with:
 
 ```bash
 python3 gm-claude.py --uninstall
 ```
-
-You can also run the full upstream companion instead
-(`python3 companion/codelight.py --name …` from a [codelight](https://github.com/henrikekblad/codelight)
-checkout) — the screen is protocol-compatible with both.
 
 ## Building the firmware
 
@@ -80,7 +73,7 @@ Press `Ctrl+]` to exit the monitor.
 On first boot (or when no configured network is reachable) the device starts an
 AP and shows setup mode on screen:
 
-1. Join WiFi **`codelight-screen-setup`**
+1. Join WiFi **`claudius-setup`**
 2. Open `http://192.168.4.1`
 3. Enter WiFi credentials (up to 3 networks), device name, companion name/host/secret
 4. Save & apply — the device reboots, joins your LAN, and connects to the companion
@@ -133,6 +126,7 @@ curl -F "firmware=@build/gm_s3.bin" http://<device-name>.local/api/ota
 ```
 ├── main/                 # BSP, WiFi, mDNS, WebSocket, config HTTP, OTA
 ├── components/ui/        # Shared LVGL status dashboard (+ simulator)
+├── companion/            # Claude-only status daemon (gm-claude.py)
 ├── sim/                  # macOS SDL2 simulator
 ├── partitions.csv        # 16 MB: factory + 2× OTA + storage
 └── lv_conf.h             # Shared LVGL config

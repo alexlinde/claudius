@@ -104,7 +104,7 @@ int main(void)
     fill_mock(&initial, AGENT_STATUS_IDLE, true);
     ui_set_status(&initial);
 
-    printf("gm-s3 simulator — codelight status UI\n");
+    printf("gm-s3 simulator — claudius status UI\n");
     printf("  SPACE = touch pad (tap / burst / long-press)\n");
     printf("  1/2/3 = WORKING / WAITING / IDLE\n");
     printf("  0     = OFFLINE\n");

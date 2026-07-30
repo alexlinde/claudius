@@ -80,7 +80,7 @@ static void sleep_supervisor_task(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "codelight S3 screen starting…");
+    ESP_LOGI(TAG, "claudius S3 screen starting…");
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {

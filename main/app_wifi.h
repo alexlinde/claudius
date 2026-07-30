@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define APP_AP_SSID "codelight-screen-setup"
+#define APP_AP_SSID "claudius-setup"
 
 typedef enum {
     APP_WIFI_MODE_STA = 0,

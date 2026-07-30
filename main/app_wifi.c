@@ -26,7 +26,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry < 5) {
+        /* During initial try_sta() we bound retries so we can fall through to
+         * the next SSID / softAP. After a successful association, keep trying
+         * forever so a brief AP blip doesn't leave the screen offline. */
+        if (s_mode == APP_WIFI_MODE_STA) {
+            esp_wifi_connect();
+            app_dbg_log("wifi: reconnecting…");
+        } else if (s_retry < 5) {
             s_retry++;
             esp_wifi_connect();
             app_dbg_log("wifi: retry %d", s_retry);
@@ -70,7 +76,8 @@ static bool try_sta(void)
         wifi_config_t cfg = {0};
         strncpy((char *)cfg.sta.ssid, g_cfg.wifi[i].ssid, sizeof(cfg.sta.ssid) - 1);
         strncpy((char *)cfg.sta.password, g_cfg.wifi[i].password, sizeof(cfg.sta.password) - 1);
-        cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        /* Allow open / WPA / WPA2 / WPA3 — WPA2_PSK threshold rejects open APs. */
+        cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
         s_retry = 0;
         xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
