@@ -421,7 +421,7 @@ static void update_clock_locked(void)
 {
     time_t now = time(NULL);
     if (now < 1000000000L) {
-        lv_label_set_text(s_clock, "--:--:--");
+        if (!s_sleeping) lv_label_set_text(s_clock, "--:--:--");
         if (s_sleep_clock) lv_label_set_text(s_sleep_clock, "--:--");
         return;
     }
@@ -430,12 +430,22 @@ static void update_clock_locked(void)
     struct tm t;
     gmtime_r(&local, &t);
     char buf[16];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
-    lv_label_set_text(s_clock, buf);
 
+    /* Dashboard clock (HH:MM:SS). Skip while sleeping — the sleep overlay is
+     * opaque full-screen, and re-invalidating the hidden label still costs
+     * LVGL draw work under the cover. */
+    if (!s_sleeping) {
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+        lv_label_set_text(s_clock, buf);
+    }
+
+    /* Screensaver clock is HH:MM — only rewrite when the minute rolls so we
+     * don't thrash tiny_ttf glyph paths every animation frame. */
     if (s_sleep_clock) {
         snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
-        lv_label_set_text(s_sleep_clock, buf);
+        if (strcmp(lv_label_get_text(s_sleep_clock), buf) != 0) {
+            lv_label_set_text(s_sleep_clock, buf);
+        }
     }
 }
 
@@ -501,10 +511,15 @@ static void sleep_reinit_sprites(void)
     s_spr_vx[ci] = 0.8f;
     s_spr_vy[ci] = 0.6f;
     if (!s_sleep_clock) {
-        s_sleep_clock = make_label(s_sleep_layer, s_font_value, rgb(COL_TITLE));
+        /* Bitmap font: the bouncing sleep clock re-blits every frame; tiny_ttf
+         * rasterization in that path has wedged taskLVGL overnight (TWDT on
+         * IDLE0, frozen clock, dead tap-to-wake). Montserrat stays in cache. */
+        s_sleep_clock = make_label(s_sleep_layer, &lv_font_montserrat_28, rgb(COL_TITLE));
+        lv_obj_set_style_text_letter_space(s_sleep_clock, 2, 0);
     }
     lv_obj_remove_flag(s_sleep_clock, LV_OBJ_FLAG_HIDDEN);
     s_spr_count++;
+    update_clock_locked();
 }
 
 static void sleep_animate(uint32_t now_ms)
@@ -513,8 +528,8 @@ static void sleep_animate(uint32_t now_ms)
     s_last_sleep_frame_ms = now_ms;
 
     for (int i = 0; i < s_spr_count; i++) {
-        int w = s_spr_is_clock[i] ? 80 : LOGO_W;
-        int h = s_spr_is_clock[i] ? 28 : LOGO_H;
+        int w = s_spr_is_clock[i] ? 100 : LOGO_W;
+        int h = s_spr_is_clock[i] ? 32 : LOGO_H;
         s_spr_x[i] += s_spr_vx[i];
         s_spr_y[i] += s_spr_vy[i];
         bool bounce = false;
@@ -527,10 +542,15 @@ static void sleep_animate(uint32_t now_ms)
             s_spr_vx[i] *= j;
             s_spr_vy[i] *= (0.85f + frand01() * 0.3f);
         }
+        int nx = (int)s_spr_x[i];
+        int ny = (int)s_spr_y[i];
         if (s_spr_is_clock[i]) {
-            lv_obj_set_pos(s_sleep_clock, (int)s_spr_x[i], (int)s_spr_y[i]);
-        } else {
-            lv_obj_set_pos(s_sleep_logo_imgs[i], (int)s_spr_x[i], (int)s_spr_y[i]);
+            if (nx != lv_obj_get_x(s_sleep_clock) || ny != lv_obj_get_y(s_sleep_clock)) {
+                lv_obj_set_pos(s_sleep_clock, nx, ny);
+            }
+        } else if (nx != lv_obj_get_x(s_sleep_logo_imgs[i]) ||
+                   ny != lv_obj_get_y(s_sleep_logo_imgs[i])) {
+            lv_obj_set_pos(s_sleep_logo_imgs[i], nx, ny);
         }
     }
     update_clock_locked();

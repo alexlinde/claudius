@@ -39,6 +39,7 @@
    FONT SETTINGS
  *====================*/
 #define LV_FONT_MONTSERRAT_14 1   /* kept as LV_FONT_DEFAULT bootstrap */
+#define LV_FONT_MONTSERRAT_28 1   /* screensaver clock — bitmap, not tiny_ttf */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /* lv_tiny_ttf: TrueType rasterizer for runtime-sized fonts. */

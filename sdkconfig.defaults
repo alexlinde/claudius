@@ -24,6 +24,7 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
 
 # LVGL (configured via Kconfig, LV_CONF_SKIP=y is the default)
 CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_USE_LOG=n
 CONFIG_LV_USE_BAR=y
@@ -42,3 +43,10 @@ CONFIG_HTTPD_MAX_URI_LEN=512
 
 # Compiler optimisation
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# If LVGL (or anything else) busy-spins and starves IDLE0, reboot instead of
+# leaving a frozen screensaver on the panel until someone power-cycles.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
