@@ -121,6 +121,7 @@ cmake --build sim/build -j
 | 0     | Mock OFFLINE                    |
 | 4     | Mock AUTH FAIL                  |
 | S     | Toggle screensaver              |
+| W     | Trigger panel wash              |
 
 ## UI and gestures
 
@@ -135,6 +136,10 @@ Screensaver starts after 10 minutes without a companion (if enabled) or after
 1 hour without active sessions. Active (`working` / `blocked` / `busy` /
 `waiting`) activity wakes the dashboard. Agent logos from the companion
 `config` message bounce on the sleep screen.
+
+While the dashboard is awake, a brief black → white → gray panel wash runs
+every 10 minutes to reduce TFT image retention on long sessions. Default
+backlight is 25%.
 
 ## OTA
 

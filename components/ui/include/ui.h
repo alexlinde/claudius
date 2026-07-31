@@ -50,6 +50,12 @@ void ui_on_long_press(void);
  * 100 shows "Resetting…". Safe to call from any task. */
 void ui_set_reset_progress(int percent);
 
+/* Anti-ghosting black/white/gray wash. Safe to call from any task; no-op if
+ * already washing, sleeping, or showing the factory-reset overlay.
+ * ui_tick also starts a wash automatically every 10 minutes while awake. */
+void ui_start_panel_wash(void);
+bool ui_is_washing(void);
+
 /* Preferred brightness percent (1..100). Sleep dims separately and restores
  * this level on wake. Safe to call from any task. */
 int ui_get_brightness(void);

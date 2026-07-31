@@ -38,10 +38,15 @@
 #define COL_RED      0xFF2200
 #define COL_OFFLINE  0x424242
 
-#define UI_DEFAULT_BRIGHTNESS 50
+#define UI_DEFAULT_BRIGHTNESS 25
 #define UI_SLEEP_BRIGHTNESS   8
 #define SLEEP_FRAME_MS        40
 #define MAX_SLEEP_SPRITES     4
+
+/* Anti-ghosting panel wash: black → white → gray, then restore. */
+#define PANEL_WASH_INTERVAL_MS (10UL * 60UL * 1000UL)
+#define PANEL_WASH_PHASE_MS    500
+#define COL_WASH_GRAY          0x808080
 
 /* ---------------------------------------------------------------------------
  * Encoder indev (gestures) — kept for wake / future settings
@@ -109,6 +114,20 @@ static lv_obj_t *s_reset_title;
 static lv_obj_t *s_reset_hint;
 static lv_obj_t *s_reset_bar;
 static int s_reset_pct;
+
+/* Panel wash overlay (anti-ghosting) */
+typedef enum {
+    WASH_IDLE = 0,
+    WASH_BLACK,
+    WASH_WHITE,
+    WASH_GRAY,
+} wash_phase_t;
+
+static lv_obj_t *s_wash_layer;
+static wash_phase_t s_wash_phase;
+static uint32_t s_wash_phase_start_ms;
+static uint32_t s_last_wash_ms;
+static bool s_wash_request;
 
 static void apply_brightness(int percent)
 {
@@ -645,6 +664,22 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_obj_align(s_reset_bar, LV_ALIGN_CENTER, 0, 28);
     s_reset_pct = 0;
 
+    /* Panel wash overlay (hidden; above sleep, below reset) */
+    s_wash_layer = lv_obj_create(parent);
+    lv_obj_set_size(s_wash_layer, 240, 240);
+    lv_obj_set_pos(s_wash_layer, 0, 0);
+    lv_obj_set_style_bg_color(s_wash_layer, rgb(COL_BG), 0);
+    lv_obj_set_style_bg_opa(s_wash_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_wash_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_wash_layer, 0, 0);
+    lv_obj_set_style_radius(s_wash_layer, 0, 0);
+    lv_obj_remove_flag(s_wash_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_wash_layer, LV_OBJ_FLAG_HIDDEN);
+    s_wash_phase = WASH_IDLE;
+    s_wash_phase_start_ms = 0;
+    s_last_wash_ms = 0;
+    s_wash_request = false;
+
     s_group = lv_group_create();
     lv_group_set_default(s_group);
     s_indev = lv_indev_create();
@@ -739,7 +774,7 @@ void ui_set_utc_offset(long offset_sec)
 void ui_sleep_start(void)
 {
     lock_ui();
-    if (s_sleeping) {
+    if (s_sleeping || s_wash_phase != WASH_IDLE) {
         unlock_ui();
         return;
     }
@@ -763,6 +798,8 @@ void ui_wake(void)
     apply_brightness(s_user_brightness);
     apply_snapshot_locked();
     update_clock_locked();
+    /* Restart wash countdown so waking doesn't immediately flash the panel. */
+    s_last_wash_ms = 0;
     unlock_ui();
 }
 
@@ -771,9 +808,64 @@ bool ui_is_sleeping(void)
     return s_sleeping;
 }
 
+static void wash_set_color_locked(uint32_t hex)
+{
+    lv_obj_set_style_bg_color(s_wash_layer, rgb(hex), 0);
+}
+
+static void wash_begin_locked(uint32_t now_ms)
+{
+    s_wash_phase = WASH_BLACK;
+    s_wash_phase_start_ms = now_ms;
+    wash_set_color_locked(COL_BG);
+    lv_obj_remove_flag(s_wash_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_wash_layer);
+    /* Keep reset overlay visible if a factory-reset hold is in progress. */
+    if (s_reset_pct > 0) lv_obj_move_foreground(s_reset_layer);
+    apply_brightness(s_user_brightness);
+}
+
+static void wash_advance_locked(uint32_t now_ms)
+{
+    if (s_wash_phase == WASH_IDLE) return;
+    if ((now_ms - s_wash_phase_start_ms) < PANEL_WASH_PHASE_MS) return;
+
+    s_wash_phase_start_ms = now_ms;
+    switch (s_wash_phase) {
+    case WASH_BLACK:
+        s_wash_phase = WASH_WHITE;
+        wash_set_color_locked(COL_TITLE);
+        break;
+    case WASH_WHITE:
+        s_wash_phase = WASH_GRAY;
+        wash_set_color_locked(COL_WASH_GRAY);
+        break;
+    case WASH_GRAY:
+    default:
+        s_wash_phase = WASH_IDLE;
+        lv_obj_add_flag(s_wash_layer, LV_OBJ_FLAG_HIDDEN);
+        s_last_wash_ms = now_ms;
+        if (!s_sleeping) apply_brightness(s_user_brightness);
+        break;
+    }
+}
+
 void ui_tick(uint32_t now_ms)
 {
     lock_ui();
+    if (s_last_wash_ms == 0) s_last_wash_ms = now_ms;
+
+    if (s_wash_phase != WASH_IDLE) {
+        wash_advance_locked(now_ms);
+    } else if (!s_sleeping && s_reset_pct == 0 &&
+               (s_wash_request ||
+                (now_ms - s_last_wash_ms) >= PANEL_WASH_INTERVAL_MS)) {
+        s_wash_request = false;
+        wash_begin_locked(now_ms);
+    } else {
+        s_wash_request = false;
+    }
+
     time_t now = time(NULL);
     if ((uint32_t)now != s_last_clock_sec) {
         s_last_clock_sec = (uint32_t)now;
@@ -781,6 +873,20 @@ void ui_tick(uint32_t now_ms)
     }
     if (s_sleeping) sleep_animate(now_ms);
     unlock_ui();
+}
+
+void ui_start_panel_wash(void)
+{
+    lock_ui();
+    if (s_wash_phase == WASH_IDLE && !s_sleeping && s_reset_pct == 0) {
+        s_wash_request = true;
+    }
+    unlock_ui();
+}
+
+bool ui_is_washing(void)
+{
+    return s_wash_phase != WASH_IDLE;
 }
 
 void ui_on_tap(void)

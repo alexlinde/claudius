@@ -18,7 +18,7 @@ void app_config_set_defaults(void)
     snprintf(g_cfg.device_name, sizeof(g_cfg.device_name), "claudius");
     g_cfg.sleep_on_disconnect = true;
     g_cfg.sleep_on_idle = true;
-    g_cfg.brightness = 50;
+    g_cfg.brightness = 25;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *out, size_t out_len)
@@ -40,7 +40,7 @@ static esp_err_t load_from_handle(nvs_handle_t h)
     if (nvs_get_u8(h, "sleep_disc", &u8) == ESP_OK) g_cfg.sleep_on_disconnect = u8 != 0;
     u8 = 1;
     if (nvs_get_u8(h, "sleep_idle", &u8) == ESP_OK) g_cfg.sleep_on_idle = u8 != 0;
-    u8 = 50;
+    u8 = 25;
     if (nvs_get_u8(h, "brightness", &u8) == ESP_OK) {
         if (u8 < 1) u8 = 1;
         if (u8 > 100) u8 = 100;

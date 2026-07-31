@@ -68,8 +68,10 @@ static void sleep_supervisor_task(void *arg)
             /* Only idle-sleep when last known status was idle — approximated
              * by last_active not advancing. disc_sleep is clear. */
             if (disc_sleep || idle_sleep) {
-                app_dbg_log("sleep: starting (%s)", disc_sleep ? "disconnect" : "idle");
-                ui_sleep_start();
+                if (!ui_is_washing()) {
+                    app_dbg_log("sleep: starting (%s)", disc_sleep ? "disconnect" : "idle");
+                    ui_sleep_start();
+                }
             }
         }
 

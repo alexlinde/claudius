@@ -116,6 +116,10 @@ static void apply_key_mock(SDL_Scancode key)
             ui_sleep_start();
         }
         break;
+    case SDL_SCANCODE_W:
+        printf("[sim] panel wash\n");
+        ui_start_panel_wash();
+        break;
     default:
         break;
     }
@@ -148,6 +152,7 @@ int main(void)
     printf("  0     = OFFLINE\n");
     printf("  4     = AUTH FAIL\n");
     printf("  S     = toggle screensaver\n");
+    printf("  W     = panel wash (anti-ghosting)\n");
     printf("  Close window to exit.\n");
 
     bool     space_prev       = false;
