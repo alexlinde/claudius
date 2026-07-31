@@ -45,6 +45,9 @@ final class StatusStore {
         case .error(let msg):
             return "Error: \(msg)"
         case .running:
+            if !usage.isLoaded {
+                return "Running · \(connectedClients) screen\(connectedClients == 1 ? "" : "s") · usage…"
+            }
             let pct = Int((usage.sessionPct * 100).rounded())
             let wPct = Int((usage.weeklyPct * 100).rounded())
             return "Running · \(connectedClients) screen\(connectedClients == 1 ? "" : "s") · session \(pct)% · weekly \(wPct)%"

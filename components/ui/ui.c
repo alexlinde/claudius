@@ -678,11 +678,28 @@ void ui_set_status(const status_snapshot_t *snap)
     unlock_ui();
 }
 
+static void clear_companion_status_locked(void)
+{
+    s_snap.weekly_pct = 0;
+    s_snap.session_pct = 0;
+    s_snap.weekly_title[0] = '\0';
+    s_snap.session_title[0] = '\0';
+    s_snap.weekly_reset[0] = '\0';
+    s_snap.session_reset[0] = '\0';
+    s_snap.session_count = 0;
+    s_snap.any_active = false;
+    s_session_idx = 0;
+    memset(s_snap.sessions, 0, sizeof(s_snap.sessions));
+}
+
 void ui_set_connected(bool connected)
 {
     lock_ui();
     s_snap.connected = connected;
-    if (!connected) s_snap.auth_failed = false;
+    if (!connected) {
+        s_snap.auth_failed = false;
+        clear_companion_status_locked();
+    }
     apply_snapshot_locked();
     unlock_ui();
 }
@@ -693,8 +710,7 @@ void ui_set_auth_failed(bool failed)
     s_snap.auth_failed = failed;
     if (failed) {
         s_snap.connected = false;
-        s_snap.session_count = 0;
-        s_snap.any_active = false;
+        clear_companion_status_locked();
     }
     apply_snapshot_locked();
     unlock_ui();

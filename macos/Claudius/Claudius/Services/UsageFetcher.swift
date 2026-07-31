@@ -29,7 +29,8 @@ enum UsageFetcher {
                 sessionPct: sessionUtil,
                 weeklyPct: weeklyUtil,
                 sessionReset: UsageTime.formatISOCountdown(string(session["resets_at"])),
-                weeklyReset: UsageTime.formatISOCountdown(string(weekly["resets_at"]))
+                weeklyReset: UsageTime.formatISOCountdown(string(weekly["resets_at"])),
+                isLoaded: true
             )
         }
         task.resume()

@@ -191,8 +191,13 @@ static void ws_event(void *handler_args, esp_event_base_t base, int32_t id, void
         break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
+    case WEBSOCKET_EVENT_CLOSED:
+        /* Clean companion quit sends a WS close → CLOSED (not DISCONNECTED).
+         * Ignoring CLOSED leaves s_connected true forever and blocks rediscovery. */
         if (s_connected || s_auth_failed) {
-            app_dbg_log("ws: disconnected%s", s_auth_failed ? " (auth)" : "");
+            app_dbg_log("ws: disconnected%s%s",
+                        s_auth_failed ? " (auth)" : "",
+                        id == WEBSOCKET_EVENT_CLOSED ? " (closed)" : "");
         }
         s_connected = false;
         s_hello_sent = false;
@@ -262,7 +267,10 @@ static bool begin_ws(const char *host, uint16_t port)
         .network_timeout_ms = 10000,
         .buffer_size = 8192,
         .task_stack = 8192,
-        .ping_interval_sec = 30,
+        .ping_interval_sec = 20,
+        /* Default library timeout is 120s; tighten so a crashed companion
+         * (no close frame) flips the UI offline within ~1 minute. */
+        .pingpong_timeout_sec = 40,
     };
     s_client = esp_websocket_client_init(&cfg);
     if (!s_client) return false;
@@ -310,6 +318,9 @@ static void flush_ui_flags(void)
     }
     if (s_ui_offline) {
         s_ui_offline = false;
+        /* Drop cached status so a later reconnect wake doesn't revive
+         * stale usage bars before the companion pushes a fresh snapshot. */
+        memset(&s_last_status, 0, sizeof(s_last_status));
         if (s_auth_failed) {
             ui_set_auth_failed(true);
         } else if (!s_connected) {
@@ -353,21 +364,35 @@ static void ws_task(void *arg)
         }
 
         bool transport_up = s_client && esp_websocket_client_is_connected(s_client);
-        if (s_connected || transport_up) {
+
+        /* Safety net: if the WS task died after a clean close but we missed
+         * the event, don't keep the UI stuck on "connected". */
+        if (s_connected && s_client && !transport_up) {
+            s_connected = false;
+            s_hello_sent = false;
+            s_need_hello = false;
+            s_need_auth = false;
+            s_ui_offline = true;
+            touch_companion();
+            app_dbg_log("ws: disconnected (stale)");
+            flush_ui_flags();
+        }
+
+        if (s_connected && transport_up) {
             /* Healthy session — don't let the discover timer expire. */
             last_discover = now_ms();
         }
 
-        bool need_discover = !s_client ||
-            (!s_connected && !transport_up && !s_auth_failed &&
-             (now_ms() - last_discover) >= WS_DISCOVER_MS);
+        /* After a clean close the client handle can linger stopped with
+         * is_connected==false; tear it down and rediscover promptly. */
+        bool need_discover = !s_auth_failed &&
+            (!s_client || (!s_connected && !transport_up)) &&
+            (now_ms() - last_discover) >= WS_DISCOVER_MS;
 
         if (need_discover) {
             last_discover = now_ms();
-            if (!s_connected && !transport_up) {
-                destroy_client();
-                try_discover();
-            }
+            destroy_client();
+            try_discover();
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));

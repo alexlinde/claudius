@@ -5,6 +5,9 @@ struct UsageSnapshot: Equatable, Sendable {
     var weeklyPct: Double = 0
     var sessionReset: String = "--"
     var weeklyReset: String = "--"
+    /// False until the first successful Claude usage API fetch.
+    /// Keeps meter titles out of status JSON so the screen doesn't flash 0%.
+    var isLoaded: Bool = false
 }
 
 struct StatusPayload: Equatable, Sendable {
@@ -12,20 +15,17 @@ struct StatusPayload: Equatable, Sendable {
     var sessions: [AgentSession] = []
 
     var statusKey: String {
-        "\(SessionNormalizer.fingerprint(sessions))|\(usage.sessionPct)|\(usage.weeklyPct)"
+        let usageKey = usage.isLoaded
+            ? "\(usage.sessionPct)|\(usage.weeklyPct)"
+            : "pending"
+        return "\(SessionNormalizer.fingerprint(sessions))|\(usageKey)"
     }
 
     /// Untyped status JSON expected by the firmware.
     func jsonObject() -> [String: Any] {
         var obj: [String: Any] = [
-            "session_pct": usage.sessionPct,
-            "weekly_pct": usage.weeklyPct,
-            "session_reset": usage.sessionReset,
-            "weekly_reset": usage.weeklyReset,
             "agent_id": CompanionConstants.agentID,
             "agent_display": CompanionConstants.agentDisplay,
-            "weekly_title": "\(CompanionConstants.agentDisplay) Weekly",
-            "session_title": "\(CompanionConstants.agentDisplay) Session",
             "sessions": sessions.map { s -> [String: Any] in
                 var d: [String: Any] = [
                     "cwd": s.cwd,
@@ -42,6 +42,16 @@ struct StatusPayload: Equatable, Sendable {
                 return d
             },
         ]
+        // Omit meter fields until usage is loaded — empty titles hide the bars
+        // on the screen, avoiding a 0% flash when the companion restarts.
+        if usage.isLoaded {
+            obj["session_pct"] = usage.sessionPct
+            obj["weekly_pct"] = usage.weeklyPct
+            obj["session_reset"] = usage.sessionReset
+            obj["weekly_reset"] = usage.weeklyReset
+            obj["weekly_title"] = "\(CompanionConstants.agentDisplay) Weekly"
+            obj["session_title"] = "\(CompanionConstants.agentDisplay) Session"
+        }
         return obj
     }
 

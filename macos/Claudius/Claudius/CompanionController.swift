@@ -48,15 +48,16 @@ final class CompanionController {
         store.runState = .running
         store.lastError = nil
 
-        agentsTask = Task { [weak self] in
-            await self?.agentsLoop()
-        }
+        // Fetch usage first so a reconnecting screen doesn't get a 0% status
+        // snapshot from the agents poller before OAuth usage is ready.
         usageTask = Task { [weak self] in
             await self?.usageLoop()
         }
+        agentsTask = Task { [weak self] in
+            await self?.agentsLoop()
+        }
 
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
             await self?.bootOnce()
         }
     }
@@ -96,12 +97,6 @@ final class CompanionController {
     }
 
     private func bootOnce() async {
-        let binary = AppPreferences.claudeBinary
-        let agentResult = await Task.detached {
-            AgentsPoller.fetch(claudeBinary: binary)
-        }.value
-        applyAgents(agentResult)
-
         let usage = await Task.detached {
             UsageFetcher.fetch()
         }.value
@@ -109,6 +104,12 @@ final class CompanionController {
             store.usage = usage
             StatusSnapshotBridge.shared.update(store.snapshot())
         }
+
+        let binary = AppPreferences.claudeBinary
+        let agentResult = await Task.detached {
+            AgentsPoller.fetch(claudeBinary: binary)
+        }.value
+        applyAgents(agentResult)
         server?.broadcast(force: true)
     }
 
@@ -126,14 +127,19 @@ final class CompanionController {
     }
 
     private func usageLoop() async {
+        var first = true
         while !Task.isCancelled {
             let usage = await Task.detached {
                 UsageFetcher.fetch()
             }.value
             if let usage {
+                let changed = usage != store.usage
                 store.usage = usage
-                StatusSnapshotBridge.shared.update(store.snapshot())
-                server?.broadcast()
+                if changed || first {
+                    StatusSnapshotBridge.shared.update(store.snapshot())
+                    server?.broadcast(force: first)
+                }
+                first = false
             }
             try? await Task.sleep(
                 nanoseconds: UInt64(CompanionConstants.usageInterval * 1_000_000_000)

@@ -86,7 +86,8 @@ final class StatusPayloadTests: XCTestCase {
                 sessionPct: 0.25,
                 weeklyPct: 0.5,
                 sessionReset: "1h 0m",
-                weeklyReset: "2d 3h"
+                weeklyReset: "2d 3h",
+                isLoaded: true
             ),
             sessions: [session]
         )
@@ -98,10 +99,27 @@ final class StatusPayloadTests: XCTestCase {
         XCTAssertEqual(obj["agent_display"] as? String, "Claude")
         XCTAssertEqual(obj["session_pct"] as? Double, 0.25)
         XCTAssertEqual(obj["weekly_pct"] as? Double, 0.5)
+        XCTAssertEqual(obj["session_title"] as? String, "Claude Session")
+        XCTAssertEqual(obj["weekly_title"] as? String, "Claude Weekly")
         let sessions = try XCTUnwrap(obj["sessions"] as? [[String: Any]])
         XCTAssertEqual(sessions.count, 1)
         XCTAssertEqual(sessions[0]["state"] as? String, "working")
         XCTAssertEqual(sessions[0]["waitingFor"] as? String, "permission")
+    }
+
+    func testOmitsMetersUntilUsageLoaded() throws {
+        let payload = StatusPayload(
+            usage: UsageSnapshot(),
+            sessions: []
+        )
+        let obj = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try payload.jsonData()) as? [String: Any]
+        )
+        XCTAssertNil(obj["session_pct"])
+        XCTAssertNil(obj["weekly_pct"])
+        XCTAssertNil(obj["session_title"])
+        XCTAssertNil(obj["weekly_title"])
+        XCTAssertEqual(obj["agent_id"] as? String, "claude")
     }
 
     func testConfigMessage() throws {
