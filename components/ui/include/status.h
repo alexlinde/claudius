@@ -19,15 +19,18 @@ extern "C" {
 #define SESSION_NAME_LEN     40
 #define SESSION_KIND_LEN     16
 #define SESSION_ID_LEN       16
+#define SESSION_UUID_LEN     40          /* full sessionId UUID from CLI */
 #define SESSION_STATE_LEN    24
 #define SESSION_WAITING_LEN  48
 #define SESSION_CWD_LEN      40
+#define SESSION_KEY_LEN      48          /* stable selection key on device */
 
 /* One entry from `claude agents --json`, compacted by the companion. */
 typedef struct {
     char name[SESSION_NAME_LEN];
     char kind[SESSION_KIND_LEN];
-    char id[SESSION_ID_LEN];
+    char id[SESSION_ID_LEN];             /* short background id */
+    char session_id[SESSION_UUID_LEN];   /* sessionId — preferred stable key */
     char state[SESSION_STATE_LEN];       /* working|blocked|done|failed|stopped */
     char status[SESSION_STATE_LEN];      /* busy|waiting|… while process alive */
     char waiting_for[SESSION_WAITING_LEN];

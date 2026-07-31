@@ -52,6 +52,7 @@ static void parse_one_session(const cJSON *obj, agent_session_t *out)
     copy_str(out->name, sizeof(out->name), obj, "name");
     copy_str(out->kind, sizeof(out->kind), obj, "kind");
     copy_str(out->id, sizeof(out->id), obj, "id");
+    copy_str(out->session_id, sizeof(out->session_id), obj, "sessionId");
     copy_str(out->state, sizeof(out->state), obj, "state");
     copy_str(out->status, sizeof(out->status), obj, "status");
     copy_str(out->waiting_for, sizeof(out->waiting_for), obj, "waitingFor");

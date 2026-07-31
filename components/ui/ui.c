@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "font_ubuntu_medium.h"
 
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -68,6 +69,7 @@ static int s_brightness = UI_DEFAULT_BRIGHTNESS;      /* currently applied */
 
 static status_snapshot_t s_snap;
 static int s_session_idx;
+static char s_session_key[SESSION_KEY_LEN]; /* pin selection across re-sorts */
 static bool s_sleeping;
 static long s_utc_offset;
 static uint32_t s_last_clock_sec = UINT32_MAX;
@@ -206,6 +208,29 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t 
     return l;
 }
 
+/* Avoid lv_label_set_text when unchanged — it always reallocates and refr_text,
+ * which restarts LONG_SCROLL animations and thrashes tiny_ttf on every status
+ * push (agents poll ~2s). */
+static void label_set_if_changed(lv_obj_t *obj, const char *text)
+{
+    if (!obj) return;
+    if (!text) text = "";
+    const char *cur = lv_label_get_text(obj);
+    if (cur && strcmp(cur, text) == 0) return;
+    lv_label_set_text(obj, text);
+}
+
+static void label_set_fmt_if_changed(lv_obj_t *obj, const char *fmt, ...)
+{
+    if (!obj || !fmt) return;
+    char buf[64];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    label_set_if_changed(obj, buf);
+}
+
 static lv_obj_t *make_bar(lv_obj_t *parent, int y)
 {
     lv_obj_t *bar = lv_bar_create(parent);
@@ -251,14 +276,14 @@ static void update_meter(bool weekly, const char *title, float pct, const char *
     lv_obj_t *bar = weekly ? s_w_bar : s_s_bar;
     lv_obj_t *pct_l = weekly ? s_w_pct : s_s_pct;
 
-    lv_label_set_text(label, title);
-    lv_label_set_text(reset_l, reset && reset[0] ? reset : "--");
+    label_set_if_changed(label, title);
+    label_set_if_changed(reset_l, reset && reset[0] ? reset : "--");
     int v = (int)(pct * 100.0f + 0.5f);
     if (v < 0) v = 0;
     if (v > 100) v = 100;
     lv_bar_set_value(bar, v, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(bar, usage_color(pct), LV_PART_INDICATOR);
-    lv_label_set_text_fmt(pct_l, "%d%%", v);
+    label_set_fmt_if_changed(pct_l, "%d%%", v);
 }
 
 static void upper_copy(char *dst, size_t dst_len, const char *src)
@@ -322,10 +347,34 @@ static const agent_session_t *selected_session(void)
     return &s_snap.sessions[s_session_idx];
 }
 
+/* Prefer sessionId (interactive), then short id (background), then name|cwd.
+ * Companion re-sorts active-first every poll; index alone jumps under the user. */
+static void session_stable_key(const agent_session_t *s, char *buf, size_t len)
+{
+    if (!buf || len == 0) return;
+    if (!s) {
+        buf[0] = '\0';
+        return;
+    }
+    if (s->session_id[0]) {
+        snprintf(buf, len, "sid:%s", s->session_id);
+    } else if (s->id[0]) {
+        snprintf(buf, len, "id:%s", s->id);
+    } else {
+        snprintf(buf, len, "n:%s|%s", s->name, s->cwd);
+    }
+}
+
+static void remember_selected_session(void)
+{
+    session_stable_key(selected_session(), s_session_key, sizeof(s_session_key));
+}
+
 static void clamp_session_idx(void)
 {
     if (s_snap.session_count <= 0) {
         s_session_idx = 0;
+        s_session_key[0] = '\0';
         return;
     }
     if (s_session_idx < 0) s_session_idx = 0;
@@ -334,43 +383,67 @@ static void clamp_session_idx(void)
     }
 }
 
+static void restore_selected_session(void)
+{
+    if (s_snap.session_count <= 0) {
+        s_session_idx = 0;
+        s_session_key[0] = '\0';
+        return;
+    }
+    if (s_session_key[0]) {
+        for (int i = 0; i < s_snap.session_count; i++) {
+            char key[SESSION_KEY_LEN];
+            session_stable_key(&s_snap.sessions[i], key, sizeof(key));
+            if (strcmp(key, s_session_key) == 0) {
+                s_session_idx = i;
+                return;
+            }
+        }
+    }
+    clamp_session_idx();
+    remember_selected_session();
+}
+
 static void cycle_session(int delta)
 {
     if (s_snap.session_count <= 0) {
         s_session_idx = 0;
+        s_session_key[0] = '\0';
         return;
     }
     int n = s_snap.session_count;
     s_session_idx = (s_session_idx + delta) % n;
     if (s_session_idx < 0) s_session_idx += n;
+    remember_selected_session();
 }
 
 static void update_status_box(void)
 {
     uint32_t color;
     char state_buf[SESSION_STATE_LEN];
+    const char *waiting = "";
 
     if (s_snap.auth_failed) {
         color = COL_RED;
-        lv_label_set_text(s_status_state, "AUTH FAIL");
-        lv_label_set_text(s_status_waiting, "");
+        label_set_if_changed(s_status_state, "AUTH FAIL");
+        waiting = "";
     } else if (!s_snap.connected) {
         color = COL_OFFLINE;
-        lv_label_set_text(s_status_state, "OFFLINE");
-        lv_label_set_text(s_status_waiting, "");
+        label_set_if_changed(s_status_state, "OFFLINE");
+        waiting = "";
     } else if (s_snap.session_count <= 0) {
         color = COL_GREEN;
-        lv_label_set_text(s_status_state, "IDLE");
-        lv_label_set_text(s_status_waiting, "no sessions");
+        label_set_if_changed(s_status_state, "IDLE");
+        waiting = "no sessions";
     } else {
         const agent_session_t *s = selected_session();
         color = color_for_session(s);
         session_primary_label(s, state_buf, sizeof(state_buf));
-        lv_label_set_text(s_status_state, state_buf);
-        lv_label_set_text(s_status_waiting,
-                          (s && s->waiting_for[0]) ? s->waiting_for : "");
+        label_set_if_changed(s_status_state, state_buf);
+        waiting = (s && s->waiting_for[0]) ? s->waiting_for : "";
     }
 
+    label_set_if_changed(s_status_waiting, waiting);
     lv_obj_set_style_bg_color(s_status_box, rgb(color), 0);
     lv_obj_set_style_text_color(s_status_state, lv_color_black(), 0);
     lv_obj_set_style_text_color(s_status_waiting, lv_color_black(), 0);
@@ -379,24 +452,24 @@ static void update_status_box(void)
 static void update_sessions(void)
 {
     if (!s_snap.connected) {
-        lv_label_set_text(s_sessions_count, "");
-        lv_label_set_text(s_sessions_name, "");
+        label_set_if_changed(s_sessions_count, "");
+        label_set_if_changed(s_sessions_name, "");
         return;
     }
     if (s_snap.session_count <= 0) {
-        lv_label_set_text(s_sessions_count, "0");
-        lv_label_set_text(s_sessions_name, "sessions");
+        label_set_if_changed(s_sessions_count, "0");
+        label_set_if_changed(s_sessions_name, "sessions");
         lv_obj_set_pos(s_sessions_name, X_MARGIN + 18, Y_SESSIONS);
         lv_obj_set_width(s_sessions_name, 240 - X_MARGIN * 2 - 18);
         return;
     }
 
-    clamp_session_idx();
+    restore_selected_session();
     const agent_session_t *s = &s_snap.sessions[s_session_idx];
     const char *name = s->name[0] ? s->name : (s->cwd[0] ? s->cwd : "session");
 
-    lv_label_set_text_fmt(s_sessions_count, "%d/%d",
-                          s_session_idx + 1, s_snap.session_count);
+    label_set_fmt_if_changed(s_sessions_count, "%d/%d",
+                             s_session_idx + 1, s_snap.session_count);
     lv_obj_update_layout(s_sessions_count);
     int count_w = (int)lv_obj_get_width(s_sessions_count);
     if (count_w < 1) count_w = 28;
@@ -405,7 +478,9 @@ static void update_sessions(void)
     if (name_w < 40) name_w = 40;
     lv_obj_set_pos(s_sessions_name, name_x, Y_SESSIONS);
     lv_obj_set_width(s_sessions_name, name_w);
-    lv_label_set_text(s_sessions_name, name);
+    /* Set text after width so LONG_SCROLL measures against the final box.
+     * Skip when unchanged so the marquee keeps its animation offset. */
+    label_set_if_changed(s_sessions_name, name);
 }
 
 static void apply_snapshot_locked(void)
@@ -421,8 +496,8 @@ static void update_clock_locked(void)
 {
     time_t now = time(NULL);
     if (now < 1000000000L) {
-        if (!s_sleeping) lv_label_set_text(s_clock, "--:--:--");
-        if (s_sleep_clock) lv_label_set_text(s_sleep_clock, "--:--");
+        if (!s_sleeping) label_set_if_changed(s_clock, "--:--:--");
+        if (s_sleep_clock) label_set_if_changed(s_sleep_clock, "--:--");
         return;
     }
     /* Apply companion utc_offset manually so we don't need tzset. */
@@ -436,16 +511,14 @@ static void update_clock_locked(void)
      * LVGL draw work under the cover. */
     if (!s_sleeping) {
         snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
-        lv_label_set_text(s_clock, buf);
+        label_set_if_changed(s_clock, buf);
     }
 
     /* Screensaver clock is HH:MM — only rewrite when the minute rolls so we
      * don't thrash tiny_ttf glyph paths every animation frame. */
     if (s_sleep_clock) {
         snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
-        if (strcmp(lv_label_get_text(s_sleep_clock), buf) != 0) {
-            lv_label_set_text(s_sleep_clock, buf);
-        }
+        label_set_if_changed(s_sleep_clock, buf);
     }
 }
 
@@ -603,8 +676,8 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
 
     s_sessions_name = make_label(parent, s_font_small, rgb(COL_LABEL));
     lv_obj_set_pos(s_sessions_name, X_MARGIN + 36, Y_SESSIONS);
-    lv_obj_set_width(s_sessions_name, 240 - X_MARGIN * 2 - 36);
-    lv_label_set_long_mode(s_sessions_name, LV_LABEL_LONG_SCROLL);
+    lv_obj_set_size(s_sessions_name, 240 - X_MARGIN * 2 - 36, H_LABEL);
+    lv_label_set_long_mode(s_sessions_name, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     s_divider = lv_obj_create(parent);
     lv_obj_set_size(s_divider, 240, 1);
@@ -635,7 +708,7 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     s_status_waiting = make_label(s_status_box, s_font_small, lv_color_black());
     lv_obj_set_width(s_status_waiting, 232);
     lv_obj_set_style_text_align(s_status_waiting, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(s_status_waiting, LV_LABEL_LONG_SCROLL);
+    lv_label_set_long_mode(s_status_waiting, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_align(s_status_waiting, LV_ALIGN_CENTER, 0, 18);
 
     /* Sleep overlay (hidden) */
@@ -728,7 +801,7 @@ void ui_set_status(const status_snapshot_t *snap)
     if (!snap) return;
     lock_ui();
     s_snap = *snap;
-    clamp_session_idx();
+    restore_selected_session();
     apply_snapshot_locked();
     unlock_ui();
 }
@@ -744,6 +817,7 @@ static void clear_companion_status_locked(void)
     s_snap.session_count = 0;
     s_snap.any_active = false;
     s_session_idx = 0;
+    s_session_key[0] = '\0';
     memset(s_snap.sessions, 0, sizeof(s_snap.sessions));
 }
 

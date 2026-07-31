@@ -38,6 +38,9 @@ static void add_session(status_snapshot_t *s,
     if (status) snprintf(a->status, sizeof(a->status), "%s", status);
     if (waiting_for) snprintf(a->waiting_for, sizeof(a->waiting_for), "%s", waiting_for);
     if (cwd) snprintf(a->cwd, sizeof(a->cwd), "%s", cwd);
+    /* Stable ids so re-ordered status pushes don't yank selection after a tap. */
+    snprintf(a->session_id, sizeof(a->session_id), "sim-%d-%s",
+             s->session_count, cwd ? cwd : "x");
     if ((state && (strcmp(state, "working") == 0 || strcmp(state, "blocked") == 0)) ||
         (status && (strcmp(status, "busy") == 0 || strcmp(status, "waiting") == 0))) {
         s->any_active = true;
