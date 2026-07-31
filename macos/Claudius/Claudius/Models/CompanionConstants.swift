@@ -9,6 +9,8 @@ enum CompanionConstants {
     static let agentDisplay = "Claude"
     static let agentColor = "#DE7356"
     static let usageAPI = URL(string: "https://claude.ai/api/oauth/usage")!
+    /// Treat access tokens as stale this far before expiresAt.
+    static let oauthRefreshSkew: TimeInterval = 5 * 60
     static let claudeCredsPath = NSString(
         string: "~/.claude/.credentials.json"
     ).expandingTildeInPath
@@ -19,6 +21,10 @@ enum CompanionConstants {
     static let mdnsType = "_claudius._tcp."
     static let broadcastMinInterval: TimeInterval = 0.5
     static let broadcastDedupeWindow: TimeInterval = 5.0
+    /// Match companion/claudius.py websockets ping_interval / ping_timeout.
+    static let wsPingInterval: TimeInterval = 20
+    static let wsPingTimeout: TimeInterval = 20
+    static let wsWatchdogInterval: TimeInterval = 5
 
     /// Same base64 bitmap as companion/claudius.py — 64×64 1-bit logo for the screen.
     static let logoBitmap =

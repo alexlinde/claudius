@@ -16,19 +16,19 @@ enum AgentsPoller {
         let proc = Process()
         proc.executableURL = url
         proc.arguments = ["agents", "--json"]
-        var env = ProcessInfo.processInfo.environment
-        let extras = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin"
-        env["PATH"] = extras + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-        proc.environment = env
+        proc.environment = enrichedEnvironment()
         let out = Pipe()
         proc.standardOutput = out
-        proc.standardError = Pipe()
+        // Discard stderr without allocating a pipe we have to drain (avoids FD leaks).
+        proc.standardError = FileHandle.nullDevice
 
         do {
             try proc.run()
         } catch {
             return .binaryMissing
         }
+        // Parent must close its copy of the write end or the read may hang and FDs leak.
+        out.fileHandleForWriting.closeFile()
 
         let group = DispatchGroup()
         group.enter()
@@ -38,10 +38,14 @@ enum AgentsPoller {
         }
         if group.wait(timeout: .now() + 8) == .timedOut {
             proc.terminate()
+            // Drain/close so a timed-out child cannot leave pipes open.
+            _ = out.fileHandleForReading.readDataToEndOfFile()
+            out.fileHandleForReading.closeFile()
             return .keepLast
         }
 
         let data = out.fileHandleForReading.readDataToEndOfFile()
+        out.fileHandleForReading.closeFile()
         if proc.terminationStatus != 0 {
             return .keepLast
         }
@@ -53,10 +57,33 @@ enum AgentsPoller {
         return .sessions(SessionNormalizer.normalizeList(arr))
     }
 
+    /// PATH for subprocesses: GUI apps only get `/usr/bin:/bin:/usr/sbin:/sbin`.
+    private static func enrichedEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        let extras = "/opt/homebrew/bin:/usr/local/bin:\(home)/.local/bin"
+        env["PATH"] = extras + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+        return env
+    }
+
     private static func resolveExecutable(_ name: String) -> URL? {
-        if name.contains("/") {
-            let url = URL(fileURLWithPath: name)
-            return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+        let expanded = (name as NSString).expandingTildeInPath
+        if expanded.contains("/") {
+            return FileManager.default.isExecutableFile(atPath: expanded)
+                ? URL(fileURLWithPath: expanded) : nil
+        }
+        // Prefer direct path checks — spawning `which` every 2s leaked pipes.
+        let home = NSHomeDirectory()
+        let candidates = [
+            "\(home)/.local/bin/\(name)",
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
         }
         return which(name).map { URL(fileURLWithPath: $0) }
     }
@@ -65,20 +92,19 @@ enum AgentsPoller {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         proc.arguments = [name]
+        proc.environment = enrichedEnvironment()
         let out = Pipe()
         proc.standardOutput = out
-        proc.standardError = Pipe()
-        var env = ProcessInfo.processInfo.environment
-        let extras = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin"
-        env["PATH"] = extras + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-        proc.environment = env
+        proc.standardError = FileHandle.nullDevice
         do {
             try proc.run()
-            proc.waitUntilExit()
         } catch {
             return nil
         }
+        out.fileHandleForWriting.closeFile()
+        proc.waitUntilExit()
         let data = out.fileHandleForReading.readDataToEndOfFile()
+        out.fileHandleForReading.closeFile()
         let s = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return s.isEmpty ? nil : s
