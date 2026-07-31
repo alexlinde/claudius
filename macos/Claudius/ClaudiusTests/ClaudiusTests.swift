@@ -21,6 +21,44 @@ final class AuthTests: XCTestCase {
     }
 }
 
+final class AgentsPollerTests: XCTestCase {
+    func testParseSessionsIdleAndBusy() throws {
+        let json = """
+        [
+          {
+            "cwd": "/Users/a/quickbooks",
+            "kind": "interactive",
+            "name": "quickbooks",
+            "startedAt": 2,
+            "sessionId": "sess-idle",
+            "status": "idle"
+          },
+          {
+            "cwd": "/Users/a/busy-proj",
+            "kind": "background",
+            "name": "busy",
+            "startedAt": 1,
+            "sessionId": "sess-busy",
+            "status": "busy",
+            "state": "working"
+          }
+        ]
+        """.data(using: .utf8)!
+        let sessions = try XCTUnwrap(AgentsPoller.parseSessions(json))
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions[0].name, "busy")
+        XCTAssertEqual(sessions[0].status, "busy")
+        XCTAssertEqual(sessions[1].name, "quickbooks")
+        XCTAssertEqual(sessions[1].status, "idle")
+        XCTAssertEqual(sessions[1].statusLabel, "idle")
+    }
+
+    func testParseSessionsRejectsEmpty() {
+        XCTAssertNil(AgentsPoller.parseSessions(Data()))
+        XCTAssertNil(AgentsPoller.parseSessions(Data("not-json".utf8)))
+    }
+}
+
 final class SessionNormalizerTests: XCTestCase {
     func testNormalizeAndSortActiveFirst() {
         let raw: [[String: Any]] = [

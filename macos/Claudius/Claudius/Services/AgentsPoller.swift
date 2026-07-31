@@ -8,6 +8,8 @@ enum AgentsPoller {
         case binaryMissing
     }
 
+    private static let timeout: TimeInterval = 8
+
     static func fetch(claudeBinary: String) -> Result {
         guard let url = resolveExecutable(claudeBinary) else {
             return .binaryMissing
@@ -22,39 +24,79 @@ enum AgentsPoller {
         // Discard stderr without allocating a pipe we have to drain (avoids FD leaks).
         proc.standardError = FileHandle.nullDevice
 
+        // Drain stdout concurrently with termination. Waiting on waitUntilExit
+        // *before* reading hung under the GUI app (child already gone, pipe still
+        // full); the timeout path then drained+discarded valid JSON and returned
+        // keepLast — freezing the menu bar on a stale busy snapshot.
+        final class StdoutBox: @unchecked Sendable {
+            let lock = NSLock()
+            var data = Data()
+        }
+        let box = StdoutBox()
+        let group = DispatchGroup()
+        group.enter() // balanced by terminationHandler
+        proc.terminationHandler = { _ in
+            group.leave()
+        }
+
         do {
             try proc.run()
         } catch {
+            group.leave()
             return .binaryMissing
         }
-        // Parent must close its copy of the write end or the read may hang and FDs leak.
+        // Parent must close its copy of the write end or the read may hang.
         out.fileHandleForWriting.closeFile()
 
-        let group = DispatchGroup()
-        group.enter()
+        group.enter() // balanced by stdout drain
         DispatchQueue.global().async {
-            proc.waitUntilExit()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            box.lock.lock()
+            box.data = data
+            box.lock.unlock()
             group.leave()
         }
-        if group.wait(timeout: .now() + 8) == .timedOut {
-            proc.terminate()
-            // Drain/close so a timed-out child cannot leave pipes open.
-            _ = out.fileHandleForReading.readDataToEndOfFile()
-            out.fileHandleForReading.closeFile()
-            return .keepLast
+
+        let timedOut = group.wait(timeout: .now() + timeout) == .timedOut
+        if timedOut {
+            if proc.isRunning {
+                proc.terminate()
+            }
+            // Unblock a stuck readDataToEndOfFile and wait briefly for cleanup.
+            try? out.fileHandleForReading.close()
+            _ = group.wait(timeout: .now() + 1)
+        } else {
+            try? out.fileHandleForReading.close()
         }
 
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        out.fileHandleForReading.closeFile()
-        if proc.terminationStatus != 0 {
-            return .keepLast
+        box.lock.lock()
+        let data = box.data
+        box.lock.unlock()
+
+        if let sessions = parseSessions(data) {
+            if timedOut {
+                NSLog("[agents] recovered \(sessions.count) session(s) after wait timeout")
+            }
+            return .sessions(sessions)
         }
-        guard let obj = try? JSONSerialization.jsonObject(with: data),
+        if timedOut {
+            NSLog("[agents] timed out (\(data.count) bytes)")
+        } else if proc.terminationStatus != 0 {
+            NSLog("[agents] exit \(proc.terminationStatus)")
+        } else {
+            NSLog("[agents] bad JSON (\(data.count) bytes)")
+        }
+        return .keepLast
+    }
+
+    static func parseSessions(_ data: Data) -> [AgentSession]? {
+        guard !data.isEmpty,
+              let obj = try? JSONSerialization.jsonObject(with: data),
               let arr = obj as? [[String: Any]]
         else {
-            return .keepLast
+            return nil
         }
-        return .sessions(SessionNormalizer.normalizeList(arr))
+        return SessionNormalizer.normalizeList(arr)
     }
 
     /// PATH for subprocesses: GUI apps only get `/usr/bin:/bin:/usr/sbin:/sbin`.
@@ -102,9 +144,11 @@ enum AgentsPoller {
             return nil
         }
         out.fileHandleForWriting.closeFile()
-        proc.waitUntilExit()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         out.fileHandleForReading.closeFile()
+        if proc.isRunning {
+            proc.waitUntilExit()
+        }
         let s = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return s.isEmpty ? nil : s
