@@ -40,14 +40,20 @@ bool ui_is_sleeping(void);
  * (or from an LVGL timer). now_ms is a monotonic millisecond clock. */
 void ui_tick(uint32_t now_ms);
 
-/* Gesture entry points (same semantics as the brightness demo).
- * Tap while sleeping wakes the dashboard. */
+/* Gesture entry points. Tap while sleeping wakes the dashboard; tap while
+ * awake cycles the selected session (a double tap steps back).
+ * Lock-free publishers — safe from an ISR-adjacent context such as the
+ * esp_timer task; applied on the LVGL thread within ~30ms. */
 void ui_on_tap(void);
 void ui_on_tap_burst(int count);
 void ui_on_long_press(void);
 
 /* Hold-to-factory-reset progress. 0 hides the overlay; 1..99 fills the bar;
- * 100 shows "Resetting…". Safe to call from any task. */
+ * UI_RESET_RELEASE shows a full bar with "Release to reset" (the commit
+ * happens on release, so a latched touch channel can never wipe the device);
+ * UI_RESET_COMMIT shows "Resetting…". Lock-free publisher (latest wins). */
+#define UI_RESET_RELEASE 100
+#define UI_RESET_COMMIT  101
 void ui_set_reset_progress(int percent);
 
 /* Dedicated Wi-Fi setup instructions overlay (covers the dashboard).

@@ -41,8 +41,14 @@
 
 #define UI_DEFAULT_BRIGHTNESS 25
 #define UI_SLEEP_BRIGHTNESS   8
+/* Reference frame for sprite velocities; ui_tick's real cadence is the
+ * caller's (200ms on device), so motion is scaled by elapsed time. */
 #define SLEEP_FRAME_MS        40
+#define SLEEP_FRAME_MAX_MS    300   /* cap dt so a stall can't teleport sprites */
 #define MAX_SLEEP_SPRITES     4
+
+/* Touch events are drained this often on the LVGL thread. */
+#define INPUT_POLL_MS         30
 
 /* Anti-ghosting panel wash: black → white → gray, then restore. */
 #define PANEL_WASH_INTERVAL_MS (10UL * 60UL * 1000UL)
@@ -59,21 +65,42 @@ static bool s_enc_click_active;
 static lv_indev_t *s_indev;
 static lv_group_t *s_group;
 
-static lv_font_t *s_font_title;
-static lv_font_t *s_font_value;
-static lv_font_t *s_font_small;
+/* ---------------------------------------------------------------------------
+ * Touch events — published lock-free, applied on the LVGL thread
+ *
+ * iot_button callbacks run in the shared esp_timer task, which also drives
+ * LVGL's 5ms tick. Taking the LVGL mutex there blocked that task behind a full
+ * lv_timer_handler (incl. flush waits) and lost ticks, so the ui_on_* entry
+ * points only publish; s_input_timer applies them under the lock taskLVGL
+ * already holds. Sleep/setup branching therefore happens atomically with the
+ * state it reads.
+ * ------------------------------------------------------------------------- */
+static _Atomic int  s_tap_fwd;            /* single tap / burst ≥3: next session */
+static _Atomic int  s_tap_back;           /* double tap: previous session */
+static _Atomic bool s_long_press_pending;
+static _Atomic int  s_reset_pct_req = -1; /* latest hold-to-reset %, -1 = none */
+static lv_timer_t  *s_input_timer;
+static void input_poll_cb(lv_timer_t *timer);
+
+/* const: a failed tiny_ttf face falls back to the built-in default font. */
+static const lv_font_t *s_font_title;
+static const lv_font_t *s_font_value;
+static const lv_font_t *s_font_small;
 
 static ui_brightness_cb_t s_brightness_cb;
-static int s_user_brightness = UI_DEFAULT_BRIGHTNESS; /* preferred level (not sleep) */
-static int s_brightness = UI_DEFAULT_BRIGHTNESS;      /* currently applied */
+/* _Atomic: ui_get_brightness() is a public getter with no lock. */
+static _Atomic int s_user_brightness = UI_DEFAULT_BRIGHTNESS; /* preferred level (not sleep) */
+static int s_brightness = UI_DEFAULT_BRIGHTNESS;              /* currently applied */
 
 static status_snapshot_t s_snap;
 static int s_session_idx;
 static char s_session_key[SESSION_KEY_LEN]; /* pin selection across re-sorts */
-static bool s_sleeping;
+/* _Atomic: ui_is_sleeping() is read from ws / supervisor / httpd tasks. */
+static _Atomic bool s_sleeping;
 static long s_utc_offset;
 static uint32_t s_last_clock_sec = UINT32_MAX;
 static uint32_t s_last_sleep_frame_ms;
+static bool s_sleep_frame_valid; /* s_last_sleep_frame_ms usable as a dt base */
 
 static agent_logo_t s_logos[MAX_AGENT_LOGOS];
 static int s_logo_count;
@@ -119,7 +146,8 @@ static int s_reset_pct;
 
 /* SoftAP setup instructions overlay (below reset, above sleep/wash) */
 static lv_obj_t *s_setup_layer;
-static bool s_setup_mode;
+/* _Atomic: ui_is_setup_mode() is read from the sleep supervisor task. */
+static _Atomic bool s_setup_mode;
 
 /* Panel wash overlay (anti-ghosting) */
 typedef enum {
@@ -130,7 +158,8 @@ typedef enum {
 } wash_phase_t;
 
 static lv_obj_t *s_wash_layer;
-static wash_phase_t s_wash_phase;
+/* _Atomic: ui_is_washing() is read from the sleep supervisor task. */
+static _Atomic wash_phase_t s_wash_phase;
 static uint32_t s_wash_phase_start_ms;
 static uint32_t s_last_wash_ms;
 static bool s_wash_request;
@@ -195,12 +224,21 @@ static void read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
+/* A NULL face fed to lv_obj_set_style_text_font crashes at first draw, so fall
+ * back to the built-in bitmap default (montserrat 14 on both device and sim). */
 static void create_fonts(void)
 {
     if (s_font_title) return;
     s_font_title = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 16);
     s_font_value = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 22);
     s_font_small = lv_tiny_ttf_create_data(font_ubuntu_medium, font_ubuntu_medium_len, 13);
+
+    if (!s_font_title || !s_font_value || !s_font_small) {
+        printf("ui: tiny_ttf face failed, falling back to the default font\n");
+        if (!s_font_title) s_font_title = LV_FONT_DEFAULT;
+        if (!s_font_value) s_font_value = LV_FONT_DEFAULT;
+        if (!s_font_small) s_font_small = LV_FONT_DEFAULT;
+    }
 }
 
 static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color)
@@ -286,7 +324,15 @@ static void update_meter(bool weekly, const char *title, float pct, const char *
     if (v < 0) v = 0;
     if (v > 100) v = 100;
     lv_bar_set_value(bar, v, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar, usage_color(pct), LV_PART_INDICATOR);
+    /* Restyling always invalidates; the gradient is a function of pct, so key
+     * off the rounded percent (agents push every ~2s, usually unchanged). */
+    static int s_w_bar_v = -1;
+    static int s_s_bar_v = -1;
+    int *last_v = weekly ? &s_w_bar_v : &s_s_bar_v;
+    if (v != *last_v) {
+        *last_v = v;
+        lv_obj_set_style_bg_color(bar, usage_color(pct), LV_PART_INDICATOR);
+    }
     label_set_fmt_if_changed(pct_l, "%d%%", v);
 }
 
@@ -448,9 +494,12 @@ static void update_status_box(void)
     }
 
     label_set_if_changed(s_status_waiting, waiting);
-    lv_obj_set_style_bg_color(s_status_box, rgb(color), 0);
-    lv_obj_set_style_text_color(s_status_state, lv_color_black(), 0);
-    lv_obj_set_style_text_color(s_status_waiting, lv_color_black(), 0);
+    /* Label colors are set once at creation; only the box tint varies. */
+    static uint32_t s_status_box_col = UINT32_MAX;
+    if (color != s_status_box_col) {
+        s_status_box_col = color;
+        lv_obj_set_style_bg_color(s_status_box, rgb(color), 0);
+    }
 }
 
 static void update_sessions(void)
@@ -507,7 +556,13 @@ static void update_clock_locked(void)
     /* Apply companion utc_offset manually so we don't need tzset. */
     time_t local = now + s_utc_offset;
     struct tm t;
-    gmtime_r(&local, &t);
+    if (!gmtime_r(&local, &t)) {
+        /* Out-of-range offset/epoch — render placeholders instead of reading
+         * an uninitialized tm. */
+        if (!s_sleeping) label_set_if_changed(s_clock, "--:--:--");
+        if (s_sleep_clock) label_set_if_changed(s_sleep_clock, "--:--");
+        return;
+    }
     char buf[16];
 
     /* Dashboard clock (HH:MM:SS). Skip while sleeping — the sleep overlay is
@@ -599,16 +654,26 @@ static void sleep_reinit_sprites(void)
     update_clock_locked();
 }
 
+/* Velocities are per SLEEP_FRAME_MS, but ui_tick's cadence belongs to the
+ * caller (200ms on device), so scale each step by the elapsed time. The first
+ * frame after sleep_start has no dt — it only places the sprites. */
 static void sleep_animate(uint32_t now_ms)
 {
-    if (now_ms - s_last_sleep_frame_ms < SLEEP_FRAME_MS) return;
+    uint32_t dt = 0;
+    if (s_sleep_frame_valid) {
+        dt = now_ms - s_last_sleep_frame_ms;
+        if (dt < SLEEP_FRAME_MS) return;
+        if (dt > SLEEP_FRAME_MAX_MS) dt = SLEEP_FRAME_MAX_MS;
+    }
     s_last_sleep_frame_ms = now_ms;
+    s_sleep_frame_valid = true;
+    float step = (float)dt / (float)SLEEP_FRAME_MS;
 
     for (int i = 0; i < s_spr_count; i++) {
         int w = s_spr_is_clock[i] ? 100 : LOGO_W;
         int h = s_spr_is_clock[i] ? 32 : LOGO_H;
-        s_spr_x[i] += s_spr_vx[i];
-        s_spr_y[i] += s_spr_vy[i];
+        s_spr_x[i] += s_spr_vx[i] * step;
+        s_spr_y[i] += s_spr_vy[i] * step;
         bool bounce = false;
         if (s_spr_x[i] < 0) { s_spr_x[i] = 0; s_spr_vx[i] = -s_spr_vx[i]; bounce = true; }
         if (s_spr_x[i] > 240 - w) { s_spr_x[i] = (float)(240 - w); s_spr_vx[i] = -s_spr_vx[i]; bounce = true; }
@@ -831,6 +896,10 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     s_last_wash_ms = 0;
     s_wash_request = false;
 
+    if (!s_input_timer) {
+        s_input_timer = lv_timer_create(input_poll_cb, INPUT_POLL_MS, NULL);
+    }
+
     s_group = lv_group_create();
     lv_group_set_default(s_group);
     s_indev = lv_indev_create();
@@ -931,6 +1000,7 @@ void ui_sleep_start(void)
         return;
     }
     s_sleeping = true;
+    s_sleep_frame_valid = false;
     lv_obj_remove_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_sleep_layer);
     sleep_reinit_sprites();
@@ -938,20 +1008,23 @@ void ui_sleep_start(void)
     unlock_ui();
 }
 
-void ui_wake(void)
+static void wake_locked(void)
 {
-    lock_ui();
-    if (!s_sleeping) {
-        unlock_ui();
-        return;
-    }
+    if (!s_sleeping) return;
     s_sleeping = false;
+    s_sleep_frame_valid = false;
     lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
     apply_brightness(s_user_brightness);
     apply_snapshot_locked();
     update_clock_locked();
     /* Restart wash countdown so waking doesn't immediately flash the panel. */
     s_last_wash_ms = 0;
+}
+
+void ui_wake(void)
+{
+    lock_ui();
+    wake_locked();
     unlock_ui();
 }
 
@@ -983,7 +1056,13 @@ static void wash_advance_locked(uint32_t now_ms)
     if (s_wash_phase == WASH_IDLE) return;
     if ((now_ms - s_wash_phase_start_ms) < PANEL_WASH_PHASE_MS) return;
 
-    s_wash_phase_start_ms = now_ms;
+    /* Advance the deadline by a whole phase instead of restarting it here, so
+     * the caller's coarse tick cadence doesn't stretch every phase to a full
+     * tick period. Resync if we fell more than one phase behind. */
+    s_wash_phase_start_ms += PANEL_WASH_PHASE_MS;
+    if ((now_ms - s_wash_phase_start_ms) >= PANEL_WASH_PHASE_MS) {
+        s_wash_phase_start_ms = now_ms;
+    }
     switch (s_wash_phase) {
     case WASH_BLACK:
         s_wash_phase = WASH_WHITE;
@@ -1042,41 +1121,22 @@ bool ui_is_washing(void)
     return s_wash_phase != WASH_IDLE;
 }
 
+/* Publishers — no LVGL lock, safe from the esp_timer (iot_button) task. */
+
 void ui_on_tap(void)
 {
-    if (s_setup_mode) return;
-    if (s_sleeping) {
-        ui_wake();
-        return;
-    }
-    lock_ui();
-    cycle_session(+1);
-    apply_snapshot_locked();
-    unlock_ui();
+    atomic_fetch_add(&s_tap_fwd, 1);
 }
 
 void ui_on_tap_burst(int count)
 {
-    if (s_setup_mode) return;
-    if (s_sleeping) {
-        ui_wake();
-        return;
-    }
-    lock_ui();
-    if (count == 2) cycle_session(-1);
-    else cycle_session(+1);
-    apply_snapshot_locked();
-    unlock_ui();
+    if (count == 2) atomic_fetch_add(&s_tap_back, 1);
+    else atomic_fetch_add(&s_tap_fwd, 1);
 }
 
 void ui_on_long_press(void)
 {
-    if (s_setup_mode) return;
-    if (s_sleeping) {
-        ui_wake();
-        return;
-    }
-    /* Reserved — no settings UI yet. */
+    atomic_store(&s_long_press_pending, true);
 }
 
 void ui_set_setup_mode(bool enabled)
@@ -1090,6 +1150,7 @@ void ui_set_setup_mode(bool enabled)
     if (enabled) {
         if (s_sleeping) {
             s_sleeping = false;
+            s_sleep_frame_valid = false;
             lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
             apply_brightness(s_user_brightness);
         }
@@ -1107,18 +1168,13 @@ bool ui_is_setup_mode(void)
     return s_setup_mode;
 }
 
-void ui_set_reset_progress(int percent)
+static void set_reset_progress_locked(int percent)
 {
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-
-    lock_ui();
     if (percent == 0) {
         if (s_reset_pct != 0) {
             lv_obj_add_flag(s_reset_layer, LV_OBJ_FLAG_HIDDEN);
             s_reset_pct = 0;
         }
-        unlock_ui();
         return;
     }
 
@@ -1128,9 +1184,13 @@ void ui_set_reset_progress(int percent)
     }
 
     if (percent != s_reset_pct) {
-        if (percent >= 100) {
+        if (percent >= UI_RESET_COMMIT) {
             lv_label_set_text(s_reset_title, "Resetting…");
             lv_label_set_text(s_reset_hint, "Rebooting to setup");
+            lv_bar_set_value(s_reset_bar, 100, LV_ANIM_OFF);
+        } else if (percent == UI_RESET_RELEASE) {
+            lv_label_set_text(s_reset_title, "Release to reset");
+            lv_label_set_text(s_reset_hint, "Lift finger to confirm");
             lv_bar_set_value(s_reset_bar, 100, LV_ANIM_OFF);
         } else {
             lv_label_set_text(s_reset_title, "Hold to reset");
@@ -1141,7 +1201,41 @@ void ui_set_reset_progress(int percent)
         lv_obj_move_foreground(s_reset_layer);
         s_reset_pct = percent;
     }
-    unlock_ui();
+}
+
+/* Publisher — latest value wins; the arc only needs the newest percent. */
+void ui_set_reset_progress(int percent)
+{
+    if (percent < 0) percent = 0;
+    if (percent > UI_RESET_COMMIT) percent = UI_RESET_COMMIT;
+    atomic_store(&s_reset_pct_req, percent);
+}
+
+/* Drain the touch publishers. Runs in the LVGL task, which already holds the
+ * lock across lv_timer_handler, so sleep/setup state can't shift underneath. */
+static void input_poll_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    int pct = atomic_exchange(&s_reset_pct_req, -1);
+    if (pct >= 0) set_reset_progress_locked(pct);
+
+    int fwd = atomic_exchange(&s_tap_fwd, 0);
+    int back = atomic_exchange(&s_tap_back, 0);
+    bool long_press = atomic_exchange(&s_long_press_pending, false);
+    if (!fwd && !back && !long_press) return;
+
+    if (s_setup_mode) return;
+    if (s_sleeping) {
+        /* Any touch wakes; it never also cycles. */
+        wake_locked();
+        return;
+    }
+    int delta = fwd - back;
+    if (delta) {
+        cycle_session(delta);
+        apply_snapshot_locked();
+    }
+    /* Long press while awake: reserved — no settings UI yet. */
 }
 
 int ui_get_brightness(void)

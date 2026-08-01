@@ -1,3 +1,7 @@
+/* SIMULATOR ONLY. The firmware build sets CONFIG_LV_CONF_SKIP=y and takes its
+ * entire LVGL configuration from sdkconfig (Kconfig) — this file is not read
+ * there. Any option that must hold on device has to be changed in
+ * sdkconfig.defaults / sdkconfig as well as here. */
 #ifndef LV_CONF_H
 #define LV_CONF_H
 

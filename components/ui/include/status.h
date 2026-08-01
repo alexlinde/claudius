@@ -23,7 +23,9 @@ extern "C" {
 #define SESSION_STATE_LEN    24
 #define SESSION_WAITING_LEN  48
 #define SESSION_CWD_LEN      40
-#define SESSION_KEY_LEN      48          /* stable selection key on device */
+/* Must hold the widest key form, "n:<name>|<cwd>" (2 + 39 + 1 + 39 + NUL);
+ * truncation made same-named sessions collide and snapped tap-cycling back. */
+#define SESSION_KEY_LEN      96          /* stable selection key on device */
 
 /* One entry from `claude agents --json`, compacted by the companion. */
 typedef struct {
