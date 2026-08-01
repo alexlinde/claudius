@@ -7,13 +7,19 @@ import Security
 /// the blob is cached under Claudius's own Keychain identity so the 60s usage
 /// loop does not keep touching the foreign item. Claude Code alone refreshes
 /// tokens; when our cached access token expires (or the usage API returns 401)
-/// we re-read from Claude Code — which may prompt if that item's ACL was reset.
+/// we re-read from Claude Code.
+///
+/// Every read here is non-interactive. Claude Code's item lives in the file-based
+/// login keychain, whose ACL names the applications allowed to read it, and we are
+/// not one of them — `SecItemCopyMatching` from this process pops a dialog. Shelling
+/// out to `/usr/bin/security`, which the item *does* trust (it is the tool that
+/// manages it), reads the same bytes silently, exactly as companion/claudius.py does.
 enum ClaudeCredentials {
     private static let lock = NSLock()
-    /// Negative cache for the interactive Keychain read (guarded by `lock`).
-    /// Ad-hoc signing makes ACL breakage routine, and the usage loop ticks every
-    /// 60s — without this a single denial becomes a dialog every minute, forever.
-    nonisolated(unsafe) private static var uiPromptBlockedUntil: Date?
+    /// Backoff after a failed `security` read (guarded by `lock`). The usage loop
+    /// ticks every 60s; without this, a broken read means spawning a doomed
+    /// subprocess every minute, forever.
+    nonisolated(unsafe) private static var cliBlockedUntil: Date?
 
     /// Load a usable access token from cache, or re-seed from Claude Code.
     static func loadAccessToken() -> String? {
@@ -34,14 +40,7 @@ enum ClaudeCredentials {
             return owned.accessToken
         }
 
-        // Silent re-read when possible (no Keychain UI).
-        if let foreign = loadForeignOAuth(allowUI: false) {
-            return adopt(foreign)
-        }
-
-        // Bootstrap / ACL was reset — may show Keychain UI, at most once an hour.
-        if uiPromptAllowed(), let foreign = loadForeignOAuth(allowUI: true) {
-            uiPromptBlockedUntil = nil
+        if let foreign = loadForeignOAuth() {
             return adopt(foreign)
         }
 
@@ -60,17 +59,10 @@ enum ClaudeCredentials {
         return oauth.accessToken
     }
 
-    /// Call sites hold `lock`. Blocks the next prompt *before* attempting, so a
-    /// denial or a hang can't re-open the dialog on the following tick.
-    private static func uiPromptAllowed() -> Bool {
-        if let until = uiPromptBlockedUntil, until > Date() {
-            return false
-        }
-        uiPromptBlockedUntil = Date().addingTimeInterval(
-            CompanionConstants.keychainPromptCooldown
-        )
-        NSLog("[creds] silent keychain read failed — trying once with UI")
-        return true
+    /// Call sites hold `lock`.
+    private static func cliReadAllowed() -> Bool {
+        guard let until = cliBlockedUntil else { return true }
+        return until <= Date()
     }
 
     private static func accessTokenValid(_ oauth: OAuthTokens) -> Bool {
@@ -80,11 +72,22 @@ enum ClaudeCredentials {
         return expires.timeIntervalSinceNow > CompanionConstants.oauthRefreshSkew
     }
 
-    private static func loadForeignOAuth(allowUI: Bool) -> OAuthTokens? {
+    /// Call sites hold `lock`.
+    private static func loadForeignOAuth() -> OAuthTokens? {
         if let fromFile = parseOAuth(fromFile: CompanionConstants.claudeCredsPath) {
             return fromFile
         }
-        return parseOAuth(fromClaudeKeychainAllowUI: allowUI)
+        guard cliReadAllowed() else { return nil }
+        guard let tokens = parseOAuthFromClaudeKeychain() else {
+            cliBlockedUntil = Date().addingTimeInterval(
+                CompanionConstants.keychainRetryBackoff
+            )
+            NSLog("[creds] keychain unavailable — retrying in "
+                + "\(Int(CompanionConstants.keychainRetryBackoff) / 60)m")
+            return nil
+        }
+        cliBlockedUntil = nil
+        return tokens
     }
 
     private static func parseOAuth(fromFile path: String) -> OAuthTokens? {
@@ -94,23 +97,93 @@ enum ClaudeCredentials {
         return OAuthTokens(json: obj)
     }
 
-    private static func parseOAuth(fromClaudeKeychainAllowUI allowUI: Bool) -> OAuthTokens? {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: CompanionConstants.claudeKeychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        if !allowUI {
-            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
-        }
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    /// Read Claude Code's item via `/usr/bin/security` rather than the Security
+    /// framework — see the type doc for why this is the non-prompting path.
+    private static func parseOAuthFromClaudeKeychain() -> OAuthTokens? {
+        guard let data = runSecurity(arguments: [
+            "find-generic-password",
+            "-s", CompanionConstants.claudeKeychainService,
+            "-w",
+        ]) else { return nil }
+
+        // `-w` writes the secret followed by a newline.
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8))
+                  as? [String: Any]
         else { return nil }
         return OAuthTokens(json: obj)
+    }
+
+    /// Spawn `security` and capture stdout, bounded by `keychainReadTimeout`.
+    /// Returns nil on spawn failure, timeout, non-zero exit, or empty output.
+    private static func runSecurity(arguments: [String]) -> Data? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = arguments
+        let out = Pipe()
+        proc.standardOutput = out
+        // Discard stderr without allocating a pipe we have to drain (avoids FD leaks).
+        proc.standardError = FileHandle.nullDevice
+
+        // Drain stdout concurrently with termination — same hazard AgentsPoller hit:
+        // waiting on exit before reading can wedge on an undrained pipe.
+        final class StdoutBox: @unchecked Sendable {
+            let lock = NSLock()
+            var data = Data()
+        }
+        let box = StdoutBox()
+        let group = DispatchGroup()
+        group.enter() // balanced by terminationHandler
+        proc.terminationHandler = { _ in
+            group.leave()
+        }
+
+        do {
+            try proc.run()
+        } catch {
+            group.leave()
+            NSLog("[creds] security spawn failed: \(error.localizedDescription)")
+            return nil
+        }
+        // Parent must close its copy of the write end or the read may hang.
+        out.fileHandleForWriting.closeFile()
+
+        group.enter() // balanced by stdout drain
+        DispatchQueue.global().async {
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            box.lock.lock()
+            box.data = data
+            box.lock.unlock()
+            group.leave()
+        }
+
+        let timedOut = group.wait(
+            timeout: .now() + CompanionConstants.keychainReadTimeout
+        ) == .timedOut
+        if timedOut {
+            if proc.isRunning {
+                proc.terminate()
+            }
+            // Unblock a stuck readDataToEndOfFile and wait briefly for cleanup.
+            try? out.fileHandleForReading.close()
+            _ = group.wait(timeout: .now() + 1)
+            NSLog("[creds] security timed out after "
+                + "\(Int(CompanionConstants.keychainReadTimeout))s")
+            return nil
+        }
+        try? out.fileHandleForReading.close()
+
+        box.lock.lock()
+        let data = box.data
+        box.lock.unlock()
+
+        guard proc.terminationStatus == 0 else {
+            NSLog("[creds] security exit \(proc.terminationStatus)")
+            return nil
+        }
+        return data.isEmpty ? nil : data
     }
 }
 
@@ -171,6 +244,17 @@ private enum OwnStore {
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
+            // Never prompt for our own cache. Debug builds are ad-hoc signed
+            // (project.yml CODE_SIGN_IDENTITY "-"), so the app's code identity —
+            // and with it this item's ACL — changes on every rebuild. A miss is
+            // cheap: we re-read Claude Code and `save()` re-creates the item under
+            // the current identity.
+            //
+            // Deprecated in favour of kSecUseAuthenticationContext, but that routes
+            // through LAContext and only governs the data-protection keychain. With
+            // no keychain-access-groups entitlement this item lives in the file-based
+            // login keychain, where this is still the constant that suppresses UI.
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,

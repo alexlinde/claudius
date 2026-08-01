@@ -39,8 +39,11 @@ enum CompanionConstants {
     static let agentsFailureAlertCount = 5
     /// How long `claude agents` may keep failing before displayed sessions are dropped.
     static let agentsStaleTimeout: TimeInterval = 600
-    /// Don't re-open a Keychain dialog for Claude Code's item more often than this.
-    static let keychainPromptCooldown: TimeInterval = 3600
+    /// Bound on the `security` read of Claude Code's Keychain item.
+    static let keychainReadTimeout: TimeInterval = 5
+    /// Back off this long after a failed Keychain read.
+    /// Matches KEYCHAIN_BACKOFF in companion/claudius.py.
+    static let keychainRetryBackoff: TimeInterval = 900
 
     /// Same base64 bitmap as companion/claudius.py — 64×64 1-bit logo for the screen.
     static let logoBitmap =
