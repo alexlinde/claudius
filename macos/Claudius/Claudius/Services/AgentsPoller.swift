@@ -4,7 +4,8 @@ enum AgentsPoller {
     enum Result: Sendable {
         case sessions([AgentSession])
         /// Hard failure — keep last sessions (timeout / bad exit / JSON).
-        case keepLast
+        /// Carries a human-readable reason so persistent failures can surface in the UI.
+        case keepLast(reason: String)
         case binaryMissing
     }
 
@@ -79,14 +80,16 @@ enum AgentsPoller {
             }
             return .sessions(sessions)
         }
+        let reason: String
         if timedOut {
-            NSLog("[agents] timed out (\(data.count) bytes)")
+            reason = "timed out after \(Int(timeout))s"
         } else if proc.terminationStatus != 0 {
-            NSLog("[agents] exit \(proc.terminationStatus)")
+            reason = "exit \(proc.terminationStatus)"
         } else {
-            NSLog("[agents] bad JSON (\(data.count) bytes)")
+            reason = "bad JSON (\(data.count) bytes)"
         }
-        return .keepLast
+        NSLog("[agents] \(reason)")
+        return .keepLast(reason: reason)
     }
 
     static func parseSessions(_ data: Data) -> [AgentSession]? {

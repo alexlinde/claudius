@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        controller.start()
+        Task { await controller.start() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -41,7 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Ensure WS close frames flush even for Cmd+Q / Dock Quit.
-        controller.shutdown()
+        // Ensure WS close frames flush even for Cmd+Q / Dock Quit. This is the one
+        // place a bounded synchronous wait is justified — the process is exiting.
+        controller.shutdownForTermination()
     }
 }

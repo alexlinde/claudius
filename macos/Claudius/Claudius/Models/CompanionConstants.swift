@@ -19,12 +19,28 @@ enum CompanionConstants {
     ).expandingTildeInPath
     static let claudeKeychainService = "Claude Code-credentials"
     static let mdnsType = "_claudius._tcp."
+    static let mdnsRefreshInterval: TimeInterval = 10
     static let broadcastMinInterval: TimeInterval = 0.5
     static let broadcastDedupeWindow: TimeInterval = 5.0
+    /// Trailing edge for a broadcast the min-interval guard deferred (> minInterval).
+    static let broadcastTrailingDelay: TimeInterval = 0.6
     /// Match companion/claudius.py websockets ping_interval / ping_timeout.
     static let wsPingInterval: TimeInterval = 20
-    static let wsPingTimeout: TimeInterval = 20
+    /// Peers are declared dead this long after the last pong (> pingInterval, so a
+    /// single dropped ping doesn't reap a live screen).
+    static let wsPongTimeout: TimeInterval = 30
+    /// Half-open peers that never subscribe are dropped after this.
+    static let wsHandshakeTimeout: TimeInterval = 20
     static let wsWatchdogInterval: TimeInterval = 5
+    /// Backoff for re-binding the listener (a stale claudius.py usually frees the port).
+    static let listenerRetryBase: TimeInterval = 5
+    static let listenerRetryMax: TimeInterval = 60
+    /// Consecutive `claude agents` failures before the menu bar reports it.
+    static let agentsFailureAlertCount = 5
+    /// How long `claude agents` may keep failing before displayed sessions are dropped.
+    static let agentsStaleTimeout: TimeInterval = 600
+    /// Don't re-open a Keychain dialog for Claude Code's item more often than this.
+    static let keychainPromptCooldown: TimeInterval = 3600
 
     /// Same base64 bitmap as companion/claudius.py — 64×64 1-bit logo for the screen.
     static let logoBitmap =

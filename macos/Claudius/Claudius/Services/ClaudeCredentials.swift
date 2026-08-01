@@ -10,6 +10,10 @@ import Security
 /// we re-read from Claude Code — which may prompt if that item's ACL was reset.
 enum ClaudeCredentials {
     private static let lock = NSLock()
+    /// Negative cache for the interactive Keychain read (guarded by `lock`).
+    /// Ad-hoc signing makes ACL breakage routine, and the usage loop ticks every
+    /// 60s — without this a single denial becomes a dialog every minute, forever.
+    nonisolated(unsafe) private static var uiPromptBlockedUntil: Date?
 
     /// Load a usable access token from cache, or re-seed from Claude Code.
     static func loadAccessToken() -> String? {
@@ -32,18 +36,41 @@ enum ClaudeCredentials {
 
         // Silent re-read when possible (no Keychain UI).
         if let foreign = loadForeignOAuth(allowUI: false) {
-            OwnStore.save(foreign)
-            return foreign.accessToken
+            return adopt(foreign)
         }
 
-        // Bootstrap / ACL was reset — may show Keychain UI once.
-        if let foreign = loadForeignOAuth(allowUI: true) {
-            OwnStore.save(foreign)
-            return foreign.accessToken
+        // Bootstrap / ACL was reset — may show Keychain UI, at most once an hour.
+        if uiPromptAllowed(), let foreign = loadForeignOAuth(allowUI: true) {
+            uiPromptBlockedUntil = nil
+            return adopt(foreign)
         }
 
         // Last resort: stale cached token (may 401; caller can force-reseed).
         return forceReseed ? nil : OwnStore.load()?.accessToken
+    }
+
+    /// Cache only tokens we can actually use — caching an already-expired blob just
+    /// means re-reading (and re-rejecting) it every cycle.
+    private static func adopt(_ oauth: OAuthTokens) -> String? {
+        if accessTokenValid(oauth) {
+            OwnStore.save(oauth)
+        } else {
+            NSLog("[creds] claude code token expired — not caching, waiting for refresh")
+        }
+        return oauth.accessToken
+    }
+
+    /// Call sites hold `lock`. Blocks the next prompt *before* attempting, so a
+    /// denial or a hang can't re-open the dialog on the following tick.
+    private static func uiPromptAllowed() -> Bool {
+        if let until = uiPromptBlockedUntil, until > Date() {
+            return false
+        }
+        uiPromptBlockedUntil = Date().addingTimeInterval(
+            CompanionConstants.keychainPromptCooldown
+        )
+        NSLog("[creds] silent keychain read failed — trying once with UI")
+        return true
     }
 
     private static func accessTokenValid(_ oauth: OAuthTokens) -> Bool {

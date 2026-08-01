@@ -5,6 +5,9 @@ import Foundation
 final class StatusStore {
     enum RunState: Equatable {
         case stopped
+        /// Listener created but not yet bound — NWListener confirms asynchronously,
+        /// so "Running" must wait for .ready or the UI lies about a dead port.
+        case starting
         case running
         case error(String)
     }
@@ -24,6 +27,8 @@ final class StatusStore {
         switch runState {
         case .error, .stopped:
             return "display.trianglebadge.exclamationmark"
+        case .starting:
+            return "display"
         case .running:
             if claudeMissing {
                 return "exclamationmark.triangle"
@@ -42,6 +47,8 @@ final class StatusStore {
         switch runState {
         case .stopped:
             return "Stopped"
+        case .starting:
+            return "Starting…"
         case .error(let msg):
             return "Error: \(msg)"
         case .running:
