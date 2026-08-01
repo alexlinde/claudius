@@ -18,6 +18,10 @@ companion/**/__pycache__/
 # Local reference clones (not part of the firmware)
 vendor/
 
+# Local environment helpers
+flash.sh
+idf.sh
+
 # IDE / OS
 .DS_Store
 .idea/
@@ -25,3 +29,4 @@ vendor/
 *.swp
 *~
 .cursor/
+.cache/
