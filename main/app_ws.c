@@ -18,9 +18,14 @@
 static const char *TAG = "app_ws";
 
 #define WS_DISCOVER_MS       15000
+#define WS_AUTH_RETRY_MS     60000
+#define WS_HELLO_GRACE_MS    3000
 #define WS_URI_LEN           96
 #define WS_RX_MAX            8192
 #define WS_RX_QUEUE_LEN      6
+#define WS_DEFAULT_PORT      8765
+#define WS_OP_CONT           0x0
+#define WS_OP_TEXT           0x1
 
 static esp_websocket_client_handle_t s_client;
 static volatile bool s_connected;
@@ -30,20 +35,29 @@ static bool s_need_hello;
 static bool s_need_auth;
 static char s_auth_reply[160];
 static bool s_auth_failed;
-static bool s_request_reconnect;
+static int64_t s_auth_failed_ms;
+static volatile int64_t s_connect_ms;
 static volatile bool s_ui_offline;
 static volatile bool s_ui_online;
 static char s_last_ip[48];
-static uint16_t s_last_port = 8765;
+static uint16_t s_last_port = WS_DEFAULT_PORT;
 static bool s_have_last;
 static int64_t s_last_companion_ms;
 static int64_t s_last_active_ms;
 static status_snapshot_t s_last_status;
 static QueueHandle_t s_rxq;
 
+/* Reassembly of the message currently arriving. */
+static char *s_rx_buf;
+static int s_rx_len;
+static int s_rx_base;
+static bool s_rx_active;
+static bool s_rx_drop;
+static int64_t s_rx_drop_log_ms;
+
 typedef struct {
     uint16_t len;
-    char data[WS_RX_MAX];
+    char data[]; /* NUL-terminated */
 } ws_rx_msg_t;
 
 static int64_t now_ms(void)
@@ -75,6 +89,15 @@ static void flush_pending_sends(void)
         s_need_auth = false;
         send_txt(s_auth_reply);
         s_need_hello = true;
+    }
+
+    /* A companion with a secret challenges the moment we connect; one without
+     * never speaks first and waits for our subscribe. So when only we hold a
+     * secret, silence means the latter — subscribe instead of deadlocking. */
+    if (!s_hello_sent && !s_need_hello && s_connect_ms && g_cfg.companion_secret[0] &&
+        (now_ms() - s_connect_ms) >= WS_HELLO_GRACE_MS) {
+        s_need_hello = true;
+        app_dbg_log("ws: no challenge – subscribing anyway");
     }
 
     if (s_need_hello && !s_hello_sent) {
@@ -133,11 +156,21 @@ static void on_text(const char *data, int len)
     }
     touch_companion();
 
+    /* Anything the companion sends past the challenge means it accepted us,
+     * so an earlier rejection is stale — release the latch and the UI badge. */
+    if (s_auth_failed && msg->kind != APP_PROTO_UNAUTHORIZED &&
+        msg->kind != APP_PROTO_CHALLENGE) {
+        s_auth_failed = false;
+        s_ui_online = true;
+    }
+
     switch (msg->kind) {
     case APP_PROTO_UNAUTHORIZED:
         app_dbg_log("ws: unauthorized – check companion secret");
         s_auth_failed = true;
+        s_auth_failed_ms = now_ms();
         s_connected = false;
+        s_ui_online = false;
         s_ui_offline = true;
         if (s_client) esp_websocket_client_close(s_client, pdMS_TO_TICKS(1000));
         break;
@@ -170,6 +203,74 @@ static void on_text(const char *data, int len)
     free(msg);
 }
 
+static void rx_reset(void)
+{
+    s_rx_len = 0;
+    s_rx_base = 0;
+    s_rx_active = false;
+    s_rx_drop = false;
+}
+
+/* Discard the whole message, logging at most once per 10s so a companion
+ * spraying oversize frames can't flood the debug ring. */
+static void rx_drop_oversize(void)
+{
+    if (s_rx_drop) return;
+    s_rx_drop = true;
+    int64_t t = now_ms();
+    if (t - s_rx_drop_log_ms >= 10000) {
+        s_rx_drop_log_ms = t;
+        app_dbg_log("ws: message over %d bytes – dropped", WS_RX_MAX);
+    }
+}
+
+/* One message can span many DATA events: the client posts one per transport
+ * read, walking payload_offset through the frame, and a fragmented message
+ * adds whole continuation frames (op_code 0) after the initial text frame.
+ * Assemble here and hand the rx queue only complete messages. */
+static void rx_feed(const esp_websocket_event_data_t *ev)
+{
+    if (!ev || !s_rx_buf) return;
+    if (ev->op_code != WS_OP_TEXT && ev->op_code != WS_OP_CONT) return;
+
+    if (ev->payload_offset == 0) {
+        if (ev->op_code == WS_OP_TEXT) {
+            rx_reset();
+            s_rx_active = true;
+        }
+        s_rx_base = s_rx_len;
+    }
+    if (!s_rx_active) return; /* continuation of a message we never started */
+
+    if (ev->data_ptr && ev->data_len > 0 && !s_rx_drop) {
+        int at = s_rx_base + ev->payload_offset;
+        /* Bound 'at' before subtracting from it — payload_offset comes off the
+         * wire and must not be trusted to keep the sum in range. */
+        if (at < 0 || at >= WS_RX_MAX || ev->data_len >= WS_RX_MAX - at) {
+            rx_drop_oversize();
+        } else {
+            memcpy(s_rx_buf + at, ev->data_ptr, (size_t)ev->data_len);
+            s_rx_len = at + ev->data_len;
+        }
+    }
+
+    if (ev->payload_offset + ev->data_len < ev->payload_len) return;
+    if (!ev->fin) return;
+
+    if (!s_rx_drop && s_rx_len > 0 && s_rxq) {
+        ws_rx_msg_t *msg = malloc(sizeof(*msg) + (size_t)s_rx_len + 1);
+        if (msg) {
+            msg->len = (uint16_t)s_rx_len;
+            memcpy(msg->data, s_rx_buf, (size_t)s_rx_len);
+            msg->data[s_rx_len] = '\0';
+            if (xQueueSend(s_rxq, &msg, 0) != pdTRUE) {
+                free(msg);
+            }
+        }
+    }
+    rx_reset();
+}
+
 static void ws_event(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
     (void)handler_args;
@@ -178,14 +279,16 @@ static void ws_event(void *handler_args, esp_event_base_t base, int32_t id, void
 
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
-        /* Flags only — no UI, no send, from this task. */
-        s_auth_failed = false;
+        /* Flags only — no UI, no send, from this task. s_auth_failed stays put
+         * until a frame proves the companion accepted us. */
         s_hello_sent = false;
         s_need_auth = false;
         s_connected = true;
         s_transport_ever_up = true;
         s_ui_online = true;
         s_need_hello = !g_cfg.companion_secret[0];
+        s_connect_ms = now_ms();
+        rx_reset();
         touch_active();
         touch_companion();
         break;
@@ -203,23 +306,14 @@ static void ws_event(void *handler_args, esp_event_base_t base, int32_t id, void
         s_hello_sent = false;
         s_need_hello = false;
         s_need_auth = false;
+        s_connect_ms = 0;
         s_ui_offline = true;
+        rx_reset();
         touch_companion();
         break;
 
     case WEBSOCKET_EVENT_DATA:
-        if (data->op_code == 0x1 && data->data_ptr && data->data_len > 0 &&
-            data->payload_offset == 0 && data->payload_len == data->data_len &&
-            data->data_len < WS_RX_MAX && s_rxq) {
-            ws_rx_msg_t *msg = malloc(sizeof(*msg));
-            if (!msg) break;
-            msg->len = (uint16_t)data->data_len;
-            memcpy(msg->data, data->data_ptr, (size_t)data->data_len);
-            msg->data[data->data_len] = '\0';
-            if (xQueueSend(s_rxq, &msg, 0) != pdTRUE) {
-                free(msg);
-            }
-        }
+        rx_feed(data);
         break;
 
     case WEBSOCKET_EVENT_ERROR:
@@ -243,6 +337,8 @@ static void destroy_client(void)
     s_connected = false;
     s_need_hello = false;
     s_need_auth = false;
+    s_connect_ms = 0;
+    rx_reset();
     if (s_rxq) {
         ws_rx_msg_t *msg;
         while (xQueueReceive(s_rxq, &msg, 0) == pdTRUE) {
@@ -287,17 +383,43 @@ static bool begin_ws(const char *host, uint16_t port)
     return true;
 }
 
+/* Split an optional ":port" suffix off the configured host so "host:9000"
+ * doesn't compose into a double-port URI. */
+static void split_host_port(const char *in, char *host, size_t host_len, uint16_t *port)
+{
+    snprintf(host, host_len, "%s", in);
+    char *colon = strrchr(host, ':');
+    if (!colon || colon == host || !colon[1]) return;
+    for (const char *p = colon + 1; *p; p++) {
+        if (*p < '0' || *p > '9') return;
+    }
+    unsigned long v = strtoul(colon + 1, NULL, 10);
+    if (v < 1 || v > 65535) return;
+    *colon = '\0';
+    *port = (uint16_t)v;
+}
+
+/* Back off after a rejection instead of latching offline forever — the secret
+ * may have been corrected on the companion since. */
+static bool auth_backoff_active(void)
+{
+    return s_auth_failed && (now_ms() - s_auth_failed_ms) < WS_AUTH_RETRY_MS;
+}
+
 static void try_discover(void)
 {
-    if (s_auth_failed) return;
+    if (auth_backoff_active()) return;
 
     if (g_cfg.companion_host[0]) {
-        begin_ws(g_cfg.companion_host, 8765);
+        char host[APP_HOST_LEN];
+        uint16_t port = WS_DEFAULT_PORT;
+        split_host_port(g_cfg.companion_host, host, sizeof(host), &port);
+        if (host[0]) begin_ws(host, port);
         return;
     }
 
     char ip[48];
-    uint16_t port = 8765;
+    uint16_t port = WS_DEFAULT_PORT;
     if (app_mdns_discover_companion(ip, sizeof(ip), &port, 2000)) {
         begin_ws(ip, port);
     }
@@ -305,7 +427,9 @@ static void try_discover(void)
 
 static void flush_ui_flags(void)
 {
-    if (s_ui_online) {
+    /* Hold the online transition while a rejection stands: it clears the auth
+     * badge, and a bare transport connect is no proof the secret works. */
+    if (s_ui_online && !s_auth_failed) {
         s_ui_online = false;
         ui_set_auth_failed(false);
         if (!s_last_status.connected) {
@@ -334,6 +458,10 @@ static void ws_task(void *arg)
     (void)arg;
     /* Queue of pointers — keep item size small. */
     s_rxq = xQueueCreate(WS_RX_QUEUE_LEN, sizeof(ws_rx_msg_t *));
+    /* One buffer reused for every message; reassembly runs in the client task
+     * and must not allocate per event. */
+    s_rx_buf = malloc(WS_RX_MAX);
+    if (!s_rx_buf) app_dbg_log("ws: rx buffer alloc failed");
     s_last_companion_ms = now_ms();
     s_last_active_ms = now_ms();
 
@@ -355,14 +483,6 @@ static void ws_task(void *arg)
         flush_pending_sends();
         flush_ui_flags();
 
-        if (s_request_reconnect) {
-            s_request_reconnect = false;
-            s_auth_failed = false;
-            destroy_client();
-            try_discover();
-            last_discover = now_ms();
-        }
-
         bool transport_up = s_client && esp_websocket_client_is_connected(s_client);
 
         /* Safety net: if the WS task died after a clean close but we missed
@@ -372,6 +492,7 @@ static void ws_task(void *arg)
             s_hello_sent = false;
             s_need_hello = false;
             s_need_auth = false;
+            s_connect_ms = 0;
             s_ui_offline = true;
             touch_companion();
             app_dbg_log("ws: disconnected (stale)");
@@ -385,7 +506,7 @@ static void ws_task(void *arg)
 
         /* After a clean close the client handle can linger stopped with
          * is_connected==false; tear it down and rediscover promptly. */
-        bool need_discover = !s_auth_failed &&
+        bool need_discover = !auth_backoff_active() &&
             (!s_client || (!s_connected && !transport_up)) &&
             (now_ms() - last_discover) >= WS_DISCOVER_MS;
 
@@ -407,12 +528,6 @@ esp_err_t app_ws_start(void)
     }
     BaseType_t ok = xTaskCreate(ws_task, "app_ws", 12288, NULL, 5, NULL);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
-}
-
-void app_ws_request_reconnect(void)
-{
-    s_request_reconnect = true;
-    s_auth_failed = false;
 }
 
 bool app_ws_is_connected(void)

@@ -91,7 +91,8 @@ bool app_proto_parse(const char *json, size_t len, app_proto_msg_t *out)
         if (strcmp(type->valuestring, "config") == 0) {
             out->kind = APP_PROTO_CONFIG;
             const cJSON *off = cJSON_GetObjectItemCaseSensitive(doc, "utc_offset");
-            if (cJSON_IsNumber(off)) {
+            if (cJSON_IsNumber(off) && off->valuedouble >= -18.0 * 3600.0 &&
+                off->valuedouble <= 18.0 * 3600.0) {
                 out->config.utc_offset = (long)off->valuedouble;
                 out->config.have_utc_offset = true;
             }
@@ -122,14 +123,25 @@ bool app_proto_parse(const char *json, size_t len, app_proto_msg_t *out)
         return true;
     }
 
-    /* Untyped → status payload */
+    const cJSON *wp = cJSON_GetObjectItemCaseSensitive(doc, "weekly_pct");
+    const cJSON *sp = cJSON_GetObjectItemCaseSensitive(doc, "session_pct");
+    const cJSON *sessions = cJSON_GetObjectItemCaseSensitive(doc, "sessions");
+    const cJSON *aid = cJSON_GetObjectItemCaseSensitive(doc, "agent_id");
+
+    /* Untyped → status payload, but only when it actually carries one: a bare
+     * {} must not overwrite the dashboard with zeroes. */
+    if (!cJSON_IsArray(sessions) && !cJSON_IsNumber(wp) && !cJSON_IsNumber(sp) &&
+        !cJSON_IsString(aid)) {
+        out->kind = APP_PROTO_IGNORE;
+        cJSON_Delete(doc);
+        return true;
+    }
+
     out->kind = APP_PROTO_STATUS;
     status_snapshot_t *s = &out->status;
     s->connected = true;
     s->auth_failed = false;
 
-    const cJSON *wp = cJSON_GetObjectItemCaseSensitive(doc, "weekly_pct");
-    const cJSON *sp = cJSON_GetObjectItemCaseSensitive(doc, "session_pct");
     s->weekly_pct = cJSON_IsNumber(wp) ? (float)wp->valuedouble : 0.0f;
     s->session_pct = cJSON_IsNumber(sp) ? (float)sp->valuedouble : 0.0f;
 
@@ -140,7 +152,6 @@ bool app_proto_parse(const char *json, size_t len, app_proto_msg_t *out)
     copy_str(s->agent_display, sizeof(s->agent_display), doc, "agent_display");
     copy_str(s->agent_id, sizeof(s->agent_id), doc, "agent_id");
 
-    const cJSON *sessions = cJSON_GetObjectItemCaseSensitive(doc, "sessions");
     if (cJSON_IsArray(sessions)) {
         const cJSON *item;
         cJSON_ArrayForEach(item, sessions) {

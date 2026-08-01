@@ -9,11 +9,9 @@ extern "C" {
 #endif
 
 /* Start the WebSocket client task. Discovers companion via mDNS (or uses
- * companion_host) and maintains the connection. */
+ * companion_host, which may carry an optional ":port") and maintains the
+ * connection. */
 esp_err_t app_ws_start(void);
-
-/* Force a reconnect on the next discovery tick. */
-void app_ws_request_reconnect(void);
 
 /* True while a live authenticated/open WebSocket session is up. */
 bool app_ws_is_connected(void);
