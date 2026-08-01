@@ -1,4 +1,5 @@
 #include "app_ota.h"
+#include "app_config.h"
 #include "app_dbg.h"
 
 #include <string.h>
@@ -8,6 +9,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+/* Max time to wait for forward progress on the upload body. A stalled
+ * client must not be able to wedge esp_http_server's single handler task
+ * (and its held esp_ota handle) for the rest of uptime. */
+#define OTA_RECV_STALL_MS 30000
 
 static void reboot_task(void *arg)
 {
@@ -16,8 +21,35 @@ static void reboot_task(void *arg)
     esp_restart();
 }
 
+/* Constant-time compare against the configured secret, so a wrong guess
+ * takes the same time regardless of which byte first differs. No secret
+ * configured -> open (the setup flow relies on this). */
+static bool secret_hdr_ok(httpd_req_t *req)
+{
+    if (g_cfg.companion_secret[0] == '\0') return true;
+
+    char hdr[APP_SECRET_LEN];
+    if (httpd_req_get_hdr_value_str(req, "X-Claudius-Secret", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+    size_t slen = strlen(g_cfg.companion_secret);
+    size_t hlen = strlen(hdr);
+    if (hlen != slen) return false;
+
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < slen; i++) {
+        diff |= (uint8_t)hdr[i] ^ (uint8_t)g_cfg.companion_secret[i];
+    }
+    return diff == 0;
+}
+
 static esp_err_t ota_post_handler(httpd_req_t *req)
 {
+    if (!secret_hdr_ok(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_FAIL;
+    }
+
     esp_ota_handle_t ota = 0;
     const esp_partition_t *update = esp_ota_get_next_update_partition(NULL);
     if (!update) {
@@ -25,10 +57,11 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    app_dbg_log("ota: starting, size=%d", req->content_len);
+    app_dbg_log("ota: starting, size=%u", (unsigned)req->content_len);
     bool started = false;
     int remaining = req->content_len;
     char buf[1024];
+    TickType_t last_progress = xTaskGetTickCount();
 
     /* Simple path: raw .bin body. Also tolerate multipart by finding the
      * first 0xE9 image magic after headers. */
@@ -36,12 +69,20 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         int to_read = remaining > (int)sizeof(buf) ? (int)sizeof(buf) : remaining;
         int got = httpd_req_recv(req, buf, to_read);
         if (got <= 0) {
-            if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            if (got == HTTPD_SOCK_ERR_TIMEOUT) {
+                TickType_t stalled_ms = (xTaskGetTickCount() - last_progress) * portTICK_PERIOD_MS;
+                if (stalled_ms < OTA_RECV_STALL_MS) continue;
+                app_dbg_log("ota: stalled %lus, aborting", (unsigned long)(stalled_ms / 1000));
+                if (started) esp_ota_abort(ota);
+                httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Upload stalled");
+                return ESP_FAIL;
+            }
             if (started) esp_ota_abort(ota);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
             return ESP_FAIL;
         }
         remaining -= got;
+        last_progress = xTaskGetTickCount();
 
         const char *payload = buf;
         int payload_len = got;

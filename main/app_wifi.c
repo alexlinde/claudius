@@ -57,6 +57,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        /* Any disconnect means we're no longer associated — clear the
+         * connected bit first so app_wifi_is_sta_connected() reflects
+         * live state immediately, not just once s_mode last latched STA. */
+        xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
         /* During initial try_sta() we bound retries so we can fall through to
          * the next SSID / softAP. After a successful association, keep trying
          * forever so a brief AP blip doesn't leave the screen offline. */
@@ -75,6 +79,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         app_dbg_log("wifi: got IP " IPSTR, IP2STR(&event->ip_info.ip));
         s_retry = 0;
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
+        app_dbg_log("wifi: lost IP");
+        xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
 
@@ -105,8 +112,15 @@ static bool try_sta(void)
 
     for (uint8_t i = 0; i < g_cfg.wifi_count; i++) {
         wifi_config_t cfg = {0};
-        strncpy((char *)cfg.sta.ssid, g_cfg.wifi[i].ssid, sizeof(cfg.sta.ssid) - 1);
-        strncpy((char *)cfg.sta.password, g_cfg.wifi[i].password, sizeof(cfg.sta.password) - 1);
+        /* wifi_sta_config_t.ssid/password need not be NUL-terminated when
+         * they fill the full 32/64 bytes, so copy the whole field — a
+         * sizeof-1 copy here would truncate a max-length SSID or PSK by
+         * one byte. cfg is zero-initialized, so shorter values still end
+         * up NUL-padded. */
+        memcpy(cfg.sta.ssid, g_cfg.wifi[i].ssid,
+               strnlen(g_cfg.wifi[i].ssid, sizeof(cfg.sta.ssid)));
+        memcpy(cfg.sta.password, g_cfg.wifi[i].password,
+               strnlen(g_cfg.wifi[i].password, sizeof(cfg.sta.password)));
         /* Allow open / WPA / WPA2 / WPA3 — WPA2_PSK threshold rejects open APs. */
         cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
@@ -144,6 +158,7 @@ esp_err_t app_wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &on_wifi_event, NULL));
 
     if (try_sta()) return ESP_OK;
 
@@ -157,7 +172,11 @@ esp_err_t app_wifi_start(void)
 
 bool app_wifi_is_sta_connected(void)
 {
-    return s_mode == APP_WIFI_MODE_STA;
+    /* s_mode alone only says we're in STA mode, not that we're currently
+     * associated — consult the live event-group bit, which is cleared on
+     * disconnect/lost-IP and set on IP acquisition. */
+    if (s_mode != APP_WIFI_MODE_STA) return false;
+    return (xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) != 0;
 }
 
 app_wifi_mode_t app_wifi_mode(void)

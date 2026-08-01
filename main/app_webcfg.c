@@ -5,6 +5,7 @@
 #include "app_wifi.h"
 #include "ui.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,9 +45,16 @@ static const char INDEX_HTML[] =
 "#fw button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:.45rem .8rem;cursor:pointer}"
 ".hint{color:#8b949e;font-size:.75rem;margin-bottom:.6rem}"
 "#msg{margin-top:.8rem;font-size:.85rem;color:#3fb950;min-height:1.2rem}"
+"#fwMsg{margin-top:.5rem;font-size:.85rem;min-height:1.2rem}"
+"#authBox{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem .7rem;margin-bottom:1rem}"
+"#authBox label{color:#c9d1d9}"
 "a.ota{display:inline-block;margin-top:1.2rem;color:#58a6ff;font-size:.85rem;text-decoration:none}"
 "</style></head><body>"
 "<h1>claudius</h1>"
+"<div id=\"authBox\" style=\"display:none\">"
+"<label>Device secret</label>"
+"<input type=\"password\" id=\"deviceSecret\" placeholder=\"Required to save changes or flash firmware\">"
+"</div>"
 "<form id=\"cfg\">"
 "<h2>Device</h2>"
 "<label>Device name (mDNS hostname)</label>"
@@ -54,7 +62,7 @@ static const char INDEX_HTML[] =
 "<label>Companion name</label>"
 "<input type=\"text\" id=\"companionName\" placeholder=\"e.g. my-laptop\" maxlength=\"64\">"
 "<label>Companion host (bypasses mDNS)</label>"
-"<input type=\"text\" id=\"companionHost\" placeholder=\"e.g. 192.168.1.100\" maxlength=\"64\">"
+"<input type=\"text\" id=\"companionHost\" placeholder=\"e.g. 192.168.1.100 or host:port\" maxlength=\"64\">"
 "<label>Companion secret</label>"
 "<input type=\"password\" id=\"companionSecret\" placeholder=\"(leave blank to keep)\">"
 "<label class=\"chk\"><input type=\"checkbox\" id=\"clearSecret\"> Clear secret</label>"
@@ -70,15 +78,19 @@ static const char INDEX_HTML[] =
 "<button type=\"submit\">Save &amp; apply</button><div id=\"msg\"></div>"
 "</form>"
 "<h2>Firmware update</h2>"
-"<form id=\"fw\" method=\"POST\" action=\"/api/ota\" enctype=\"multipart/form-data\">"
-"<input type=\"file\" name=\"firmware\" accept=\".bin\" required>"
+"<form id=\"fw\">"
+"<input type=\"file\" id=\"fwFile\" name=\"firmware\" accept=\".bin\" required>"
 "<button type=\"submit\">Upload &amp; flash</button></form>"
+"<div id=\"fwMsg\"></div>"
 "<div class=\"hint\">Device reboots after a successful upload.</div>"
 "<a class=\"ota\" href=\"/debug\">Debug log →</a>"
 "<script>"
 "const list=document.getElementById('wifi-list');"
 "const bright=document.getElementById('brightness');"
 "const brightVal=document.getElementById('brightnessVal');"
+"const authBox=document.getElementById('authBox');"
+"const deviceSecret=document.getElementById('deviceSecret');"
+"function authHeaders(extra){const h=extra||{};if(deviceSecret.value)h['X-Claudius-Secret']=deviceSecret.value;return h;}"
 "function setBright(v){bright.value=v;brightVal.textContent=v+'%';}"
 "bright.oninput=()=>setBright(bright.value);"
 "function esc(s){return s.replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;');}"
@@ -96,6 +108,7 @@ static const char INDEX_HTML[] =
 "  sleepOnDisconnect.checked=cfg.sleepOnDisconnect!==false;"
 "  sleepOnIdle.checked=cfg.sleepOnIdle!==false;"
 "  companionSecret.placeholder=cfg.hasSecret?'(set — leave blank to keep)':'leave blank';"
+"  if(cfg.hasSecret)authBox.style.display='block';"
 "  (cfg.wifi||[]).forEach(n=>addNet(n.ssid,''));if(!list.children.length)addNet();"
 "}).catch(()=>addNet());"
 "document.getElementById('add-net').onclick=()=>{if(list.children.length<3)addNet();};"
@@ -112,9 +125,22 @@ static const char INDEX_HTML[] =
 "    brightness:+brightness.value,"
 "    sleepOnDisconnect:sleepOnDisconnect.checked,sleepOnIdle:sleepOnIdle.checked,wifi"
 "  };"
-"  try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
-"  msg.style.color=res.ok?'#3fb950':'#f85149';msg.textContent=res.ok?await res.text():'Error';"
+"  try{const res=await fetch('/api/config',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});"
+"  const text=await res.text();"
+"  msg.style.color=res.ok?'#3fb950':'#f85149';"
+"  msg.textContent=res.status===401?'Unauthorized — check device secret.':text;"
 "  }catch{msg.style.color='#f85149';msg.textContent='Connection error.';}"
+"};"
+"document.getElementById('fw').onsubmit=async e=>{"
+"  e.preventDefault();const fwMsg=document.getElementById('fwMsg');"
+"  const file=document.getElementById('fwFile').files[0];"
+"  if(!file){fwMsg.style.color='#f85149';fwMsg.textContent='Choose a .bin file first.';return;}"
+"  const fd=new FormData();fd.append('firmware',file);"
+"  try{const res=await fetch('/api/ota',{method:'POST',headers:authHeaders(),body:fd});"
+"  const text=await res.text();"
+"  fwMsg.style.color=res.ok?'#3fb950':'#f85149';"
+"  fwMsg.textContent=res.status===401?'Unauthorized — check device secret.':text;"
+"  }catch{fwMsg.style.color='#f85149';fwMsg.textContent='Connection error.';}"
 "};"
 "</script></body></html>";
 
@@ -155,6 +181,86 @@ static esp_err_t debug_get(httpd_req_t *req)
     return send_html(req, DEBUG_HTML);
 }
 
+/* Constant-time compare against the configured secret, so a wrong guess
+ * takes the same time regardless of which byte first differs. No secret
+ * configured -> open (the setup flow relies on this). */
+static bool secret_hdr_ok(httpd_req_t *req)
+{
+    if (g_cfg.companion_secret[0] == '\0') return true;
+
+    char hdr[APP_SECRET_LEN];
+    if (httpd_req_get_hdr_value_str(req, "X-Claudius-Secret", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+    size_t slen = strlen(g_cfg.companion_secret);
+    size_t hlen = strlen(hdr);
+    if (hlen != slen) return false;
+
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < slen; i++) {
+        diff |= (uint8_t)hdr[i] ^ (uint8_t)g_cfg.companion_secret[i];
+    }
+    return diff == 0;
+}
+
+/* Validate + trim (in place) a companionHost value: "" (no override),
+ * "host", or "host:port" where host is [A-Za-z0-9.-]+ and port is
+ * 1-65535. app_ws.c is what honors the :port suffix; this only gates
+ * what gets stored. */
+static bool valid_companion_host(char *s)
+{
+    char *start = s;
+    while (*start == ' ' || *start == '\t') start++;
+    size_t len = strlen(start);
+    while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+    start[len] = '\0';
+    if (start != s) memmove(s, start, len + 1);
+
+    if (s[0] == '\0') return true;
+
+    const char *colon = strchr(s, ':');
+    const char *host_end = colon ? colon : s + strlen(s);
+    if (host_end == s) return false;
+    for (const char *p = s; p < host_end; p++) {
+        if (!isalnum((unsigned char)*p) && *p != '.' && *p != '-') return false;
+    }
+    if (colon) {
+        if (!colon[1]) return false; /* trailing ':' with no digits */
+        long port = 0;
+        for (const char *p = colon + 1; *p; p++) {
+            if (!isdigit((unsigned char)*p)) return false; /* also rejects a 2nd ':' */
+            port = port * 10 + (*p - '0');
+            if (port > 65535) return false;
+        }
+        if (port < 1) return false;
+    }
+    return true;
+}
+
+/* Minimal JSON string escaper for streaming a single debug line: log
+ * lines are printf-formatted and can carry user-controlled substrings
+ * (SSID, hostnames), so they need escaping to stay valid JSON. */
+static void json_escape_line(const char *in, char *out, size_t out_len)
+{
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 6 < out_len; p++) {
+        switch (*p) {
+        case '"':  out[o++] = '\\'; out[o++] = '"';  break;
+        case '\\': out[o++] = '\\'; out[o++] = '\\'; break;
+        case '\n': out[o++] = '\\'; out[o++] = 'n';  break;
+        case '\r': out[o++] = '\\'; out[o++] = 'r';  break;
+        case '\t': out[o++] = '\\'; out[o++] = 't';  break;
+        default:
+            if (*p < 0x20) {
+                o += snprintf(out + o, out_len - o, "\\u%04x", *p);
+            } else {
+                out[o++] = (char)*p;
+            }
+        }
+    }
+    out[o] = '\0';
+}
+
 static esp_err_t api_debug_log(httpd_req_t *req)
 {
     uint16_t from = 0;
@@ -166,20 +272,32 @@ static esp_err_t api_debug_log(httpd_req_t *req)
         }
     }
 
-    char lines[APP_DBG_LINES][APP_DBG_LINE_LEN];
     uint16_t seq = 0, used_from = 0;
-    int n = app_dbg_copy_lines(from, lines, APP_DBG_LINES, &seq, &used_from);
+    app_dbg_range(from, &seq, &used_from);
 
-    cJSON *doc = cJSON_CreateObject();
-    cJSON_AddNumberToObject(doc, "seq", seq);
-    cJSON *arr = cJSON_AddArrayToObject(doc, "lines");
-    for (int i = 0; i < n; i++) cJSON_AddItemToArray(arr, cJSON_CreateString(lines[i]));
-    char *out = cJSON_PrintUnformatted(doc);
-    cJSON_Delete(doc);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, out ? out : "{}");
-    free(out);
-    return ESP_OK;
+
+    /* Stream the response one ring-buffer line at a time instead of
+     * copying the whole ring (APP_DBG_LINES * APP_DBG_LINE_LEN = 5,120 B)
+     * onto the 8,192 B httpd task stack — this handler is polled 1/s. */
+    char head[24];
+    int hn = snprintf(head, sizeof(head), "{\"seq\":%u,\"lines\":[", (unsigned)seq);
+    if (httpd_resp_send_chunk(req, head, hn) != ESP_OK) return ESP_FAIL;
+
+    char line[APP_DBG_LINE_LEN];
+    char esc[APP_DBG_LINE_LEN * 2 + 8];
+    char item[sizeof(esc) + 4];
+    bool first = true;
+    for (uint16_t i = used_from; i < seq; i++) {
+        if (!app_dbg_copy_line(i, line)) continue; /* lock contention: skip, don't corrupt the JSON */
+        json_escape_line(line, esc, sizeof(esc));
+        int ilen = snprintf(item, sizeof(item), "%s\"%s\"", first ? "" : ",", esc);
+        first = false;
+        if (httpd_resp_send_chunk(req, item, ilen) != ESP_OK) return ESP_FAIL;
+    }
+
+    if (httpd_resp_send_chunk(req, "]}", 2) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(req, NULL, 0); /* terminate chunked response */
 }
 
 static esp_err_t api_config_get(httpd_req_t *req)
@@ -208,6 +326,11 @@ static esp_err_t api_config_get(httpd_req_t *req)
 
 static esp_err_t api_config_post(httpd_req_t *req)
 {
+    if (!secret_hdr_ok(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_FAIL;
+    }
+
     int total = req->content_len;
     if (total <= 0 || total > 4096) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad body");
@@ -241,7 +364,15 @@ static esp_err_t api_config_post(httpd_req_t *req)
         snprintf(g_cfg.companion_name, sizeof(g_cfg.companion_name), "%s", v->valuestring);
     }
     if ((v = cJSON_GetObjectItem(doc, "companionHost")) && cJSON_IsString(v)) {
-        snprintf(g_cfg.companion_host, sizeof(g_cfg.companion_host), "%s", v->valuestring);
+        char host[APP_HOST_LEN];
+        snprintf(host, sizeof(host), "%s", v->valuestring);
+        if (!valid_companion_host(host)) {
+            cJSON_Delete(doc);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                 "Invalid companion host (use host or host:port)");
+            return ESP_FAIL;
+        }
+        snprintf(g_cfg.companion_host, sizeof(g_cfg.companion_host), "%s", host);
     }
 
     bool clear_secret = cJSON_IsTrue(cJSON_GetObjectItem(doc, "clearSecret"));
