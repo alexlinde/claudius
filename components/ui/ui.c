@@ -117,6 +117,10 @@ static lv_obj_t *s_reset_hint;
 static lv_obj_t *s_reset_bar;
 static int s_reset_pct;
 
+/* SoftAP setup instructions overlay (below reset, above sleep/wash) */
+static lv_obj_t *s_setup_layer;
+static bool s_setup_mode;
+
 /* Panel wash overlay (anti-ghosting) */
 typedef enum {
     WASH_IDLE = 0,
@@ -722,6 +726,60 @@ void ui_init(lv_obj_t *parent, ui_brightness_cb_t brightness_cb)
     lv_obj_remove_flag(s_sleep_layer, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
 
+    /* SoftAP setup instructions (hidden; above sleep/wash, below reset) */
+    s_setup_layer = lv_obj_create(parent);
+    lv_obj_set_size(s_setup_layer, 240, 240);
+    lv_obj_set_pos(s_setup_layer, 0, 0);
+    lv_obj_set_style_bg_color(s_setup_layer, rgb(COL_BG), 0);
+    lv_obj_set_style_bg_opa(s_setup_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_setup_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_setup_layer, 0, 0);
+    lv_obj_remove_flag(s_setup_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_setup_layer, LV_OBJ_FLAG_HIDDEN);
+    s_setup_mode = false;
+
+    lv_obj_t *setup_title = make_label(s_setup_layer, s_font_value, rgb(COL_TITLE));
+    lv_obj_set_width(setup_title, 220);
+    lv_obj_set_style_text_align(setup_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(setup_title, "Setup");
+    lv_obj_align(setup_title, LV_ALIGN_TOP_MID, 0, 14);
+
+    lv_obj_t *step1 = make_label(s_setup_layer, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_width(step1, 220);
+    lv_obj_set_style_text_align(step1, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(step1, "1. Join Wi-Fi");
+    lv_obj_align(step1, LV_ALIGN_TOP_MID, 0, 52);
+
+    lv_obj_t *ssid = make_label(s_setup_layer, s_font_title, rgb(COL_TITLE));
+    lv_obj_set_width(ssid, 220);
+    lv_obj_set_style_text_align(ssid, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(ssid, "claudius-setup");
+    lv_obj_align(ssid, LV_ALIGN_TOP_MID, 0, 72);
+
+    lv_obj_t *step2 = make_label(s_setup_layer, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_width(step2, 220);
+    lv_obj_set_style_text_align(step2, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(step2, "2. Open in browser");
+    lv_obj_align(step2, LV_ALIGN_TOP_MID, 0, 108);
+
+    lv_obj_t *url = make_label(s_setup_layer, s_font_title, rgb(COL_TITLE));
+    lv_obj_set_width(url, 220);
+    lv_obj_set_style_text_align(url, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(url, "192.168.4.1");
+    lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 128);
+
+    lv_obj_t *step3 = make_label(s_setup_layer, s_font_small, rgb(COL_LABEL));
+    lv_obj_set_width(step3, 220);
+    lv_obj_set_style_text_align(step3, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(step3, "3. Save Wi-Fi & reboot");
+    lv_obj_align(step3, LV_ALIGN_TOP_MID, 0, 168);
+
+    lv_obj_t *setup_hint = make_label(s_setup_layer, s_font_small, rgb(COL_RESET));
+    lv_obj_set_width(setup_hint, 220);
+    lv_obj_set_style_text_align(setup_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(setup_hint, "Open network · no password");
+    lv_obj_align(setup_hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+
     /* Factory-reset hold overlay (hidden; above sleep) */
     s_reset_layer = lv_obj_create(parent);
     lv_obj_set_size(s_reset_layer, 240, 240);
@@ -868,7 +926,7 @@ void ui_set_utc_offset(long offset_sec)
 void ui_sleep_start(void)
 {
     lock_ui();
-    if (s_sleeping || s_wash_phase != WASH_IDLE) {
+    if (s_sleeping || s_setup_mode || s_wash_phase != WASH_IDLE) {
         unlock_ui();
         return;
     }
@@ -914,7 +972,8 @@ static void wash_begin_locked(uint32_t now_ms)
     wash_set_color_locked(COL_BG);
     lv_obj_remove_flag(s_wash_layer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_wash_layer);
-    /* Keep reset overlay visible if a factory-reset hold is in progress. */
+    /* Keep setup / reset overlays above the wash. */
+    if (s_setup_mode) lv_obj_move_foreground(s_setup_layer);
     if (s_reset_pct > 0) lv_obj_move_foreground(s_reset_layer);
     apply_brightness(s_user_brightness);
 }
@@ -951,7 +1010,7 @@ void ui_tick(uint32_t now_ms)
 
     if (s_wash_phase != WASH_IDLE) {
         wash_advance_locked(now_ms);
-    } else if (!s_sleeping && s_reset_pct == 0 &&
+    } else if (!s_sleeping && !s_setup_mode && s_reset_pct == 0 &&
                (s_wash_request ||
                 (now_ms - s_last_wash_ms) >= PANEL_WASH_INTERVAL_MS)) {
         s_wash_request = false;
@@ -972,7 +1031,7 @@ void ui_tick(uint32_t now_ms)
 void ui_start_panel_wash(void)
 {
     lock_ui();
-    if (s_wash_phase == WASH_IDLE && !s_sleeping && s_reset_pct == 0) {
+    if (s_wash_phase == WASH_IDLE && !s_sleeping && !s_setup_mode && s_reset_pct == 0) {
         s_wash_request = true;
     }
     unlock_ui();
@@ -985,6 +1044,7 @@ bool ui_is_washing(void)
 
 void ui_on_tap(void)
 {
+    if (s_setup_mode) return;
     if (s_sleeping) {
         ui_wake();
         return;
@@ -997,6 +1057,7 @@ void ui_on_tap(void)
 
 void ui_on_tap_burst(int count)
 {
+    if (s_setup_mode) return;
     if (s_sleeping) {
         ui_wake();
         return;
@@ -1010,11 +1071,40 @@ void ui_on_tap_burst(int count)
 
 void ui_on_long_press(void)
 {
+    if (s_setup_mode) return;
     if (s_sleeping) {
         ui_wake();
         return;
     }
     /* Reserved — no settings UI yet. */
+}
+
+void ui_set_setup_mode(bool enabled)
+{
+    lock_ui();
+    if (enabled == s_setup_mode) {
+        unlock_ui();
+        return;
+    }
+    s_setup_mode = enabled;
+    if (enabled) {
+        if (s_sleeping) {
+            s_sleeping = false;
+            lv_obj_add_flag(s_sleep_layer, LV_OBJ_FLAG_HIDDEN);
+            apply_brightness(s_user_brightness);
+        }
+        lv_obj_remove_flag(s_setup_layer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_setup_layer);
+        if (s_reset_pct > 0) lv_obj_move_foreground(s_reset_layer);
+    } else {
+        lv_obj_add_flag(s_setup_layer, LV_OBJ_FLAG_HIDDEN);
+    }
+    unlock_ui();
+}
+
+bool ui_is_setup_mode(void)
+{
+    return s_setup_mode;
 }
 
 void ui_set_reset_progress(int percent)
@@ -1048,6 +1138,7 @@ void ui_set_reset_progress(int percent)
             lv_bar_set_value(s_reset_bar, percent, LV_ANIM_OFF);
         }
         lv_obj_remove_flag(s_reset_layer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_reset_layer);
         s_reset_pct = percent;
     }
     unlock_ui();

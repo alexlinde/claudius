@@ -14,8 +14,8 @@
 /* Must match main/bsp_touch.c so the sim behaves like the device. */
 #define TAP_SHORT_PRESS_MS     180
 #define TAP_LONG_PRESS_MS      800
-#define TAP_RESET_SHOW_MS     2000
-#define TAP_FACTORY_RESET_MS  5000
+#define TAP_RESET_SHOW_MS     3000
+#define TAP_FACTORY_RESET_MS  8000
 
 static int s_last_brightness = -1;
 static void sim_brightness_cb(int percent)
@@ -123,6 +123,15 @@ static void apply_key_mock(SDL_Scancode key)
         printf("[sim] panel wash\n");
         ui_start_panel_wash();
         break;
+    case SDL_SCANCODE_U:
+        if (ui_is_setup_mode()) {
+            printf("[sim] exit setup mode\n");
+            ui_set_setup_mode(false);
+        } else {
+            printf("[sim] enter setup mode\n");
+            ui_set_setup_mode(true);
+        }
+        break;
     default:
         break;
     }
@@ -148,12 +157,13 @@ int main(void)
 
     printf("gm-s3 simulator — claudius status UI\n");
     printf("  SPACE = touch pad (tap cycles sessions / double = prev)\n");
-    printf("         hold 2s+ for reset progress, 5s factory reset\n");
+    printf("         hold 3s+ for reset progress, 8s factory reset\n");
     printf("  1     = working + 3 sessions\n");
     printf("  2     = waitingFor permission prompt\n");
     printf("  3     = interactive + done\n");
     printf("  0     = OFFLINE\n");
     printf("  4     = AUTH FAIL\n");
+    printf("  U     = toggle setup mode\n");
     printf("  S     = toggle screensaver\n");
     printf("  W     = panel wash (anti-ghosting)\n");
     printf("  Close window to exit.\n");

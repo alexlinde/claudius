@@ -184,8 +184,22 @@ final class WebSocketServer: @unchecked Sendable {
     private func watchdogTick() {
         let now = ProcessInfo.processInfo.systemUptime
         for client in Array(clients.values) {
-            if now - client.lastHeard > CompanionConstants.wsPingTimeout {
-                NSLog("[ws] idle timeout \(client.peerKey)")
+            // Ping timeout: only kill when a ping went unanswered. Pongs arrive via
+            // setPongHandler (touch), not as receiveMessage frames — so "time since
+            // last app message" is not a valid liveness signal after subscribe.
+            if client.lastPingSent > 0,
+               client.lastHeard < client.lastPingSent,
+               now - client.lastPingSent > CompanionConstants.wsPingTimeout
+            {
+                NSLog("[ws] ping timeout \(client.peerKey)")
+                client.shutdown(reason: "idle timeout", code: 1001, completion: nil)
+                continue
+            }
+            // Half-open peers that never subscribe never get pings — drop them.
+            if !client.subscribed,
+               now - client.lastHeard > CompanionConstants.wsPingTimeout
+            {
+                NSLog("[ws] handshake timeout \(client.peerKey)")
                 client.shutdown(reason: "idle timeout", code: 1001, completion: nil)
                 continue
             }
@@ -286,6 +300,11 @@ private final class Client: @unchecked Sendable {
         guard !closed else { return }
         lastPingSent = ProcessInfo.processInfo.systemUptime
         let meta = NWProtocolWebSocket.Metadata(opcode: .ping)
+        // Network.framework delivers pongs here, not via receiveMessage.
+        meta.setPongHandler(queue) { [weak self] error in
+            guard let self, !self.closed, error == nil else { return }
+            self.touch()
+        }
         let context = NWConnection.ContentContext(identifier: "ping", metadata: [meta])
         connection.send(
             content: Data(),

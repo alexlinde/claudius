@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <string.h>
-
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
@@ -34,19 +31,9 @@ static void brightness_cb(int percent)
 
 static void show_boot_hint(void)
 {
-    status_snapshot_t snap = {0};
-    snap.connected = false;
     if (app_wifi_mode() == APP_WIFI_MODE_AP) {
-        snprintf(snap.weekly_title, sizeof(snap.weekly_title), "Setup mode");
-        snap.weekly_pct = 0;
-        snprintf(snap.weekly_reset, sizeof(snap.weekly_reset), "AP");
-        snprintf(snap.session_title, sizeof(snap.session_title), APP_AP_SSID);
-        snprintf(snap.session_reset, sizeof(snap.session_reset), "cfg");
-        snap.session_pct = 0;
-        snap.session_count = 0;
-        snprintf(snap.agent_display, sizeof(snap.agent_display), "Setup");
+        ui_set_setup_mode(true);
     }
-    ui_set_status(&snap);
 }
 
 static void sleep_supervisor_task(void *arg)
@@ -56,7 +43,7 @@ static void sleep_supervisor_task(void *arg)
         int64_t now = esp_timer_get_time() / 1000;
         ui_tick((uint32_t)now);
 
-        if (!ui_is_sleeping()) {
+        if (!ui_is_sleeping() && !ui_is_setup_mode()) {
             bool disc_sleep = g_cfg.sleep_on_disconnect
                 && app_wifi_is_sta_connected()
                 && !app_ws_is_connected()

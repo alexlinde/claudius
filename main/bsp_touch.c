@@ -19,7 +19,11 @@
 
 #define TOUCH_CHAN_ID           9
 #define TOUCH_INIT_SCAN_TIMES  3
-#define TOUCH_THRESH_RATIO     0.02f
+/* Relative threshold = smooth − benchmark. 2% was too eager in heat (baseline
+ * drift / humidity) and could hold "pressed" long enough to factory-reset. */
+#define TOUCH_THRESH_RATIO     0.05f
+#define TOUCH_DEBOUNCE_CNT     5
+#define TOUCH_DENOISE_LVL      2
 
 /* iot_button timings (ms). short_press_time also defines the inter-tap window
  * within a multi-tap burst. Single- and double-tap commit only after the
@@ -27,8 +31,8 @@
  * live via BUTTON_PRESS_REPEAT and each subsequent tap updates immediately. */
 #define BTN_SHORT_PRESS_MS      180
 #define BTN_LONG_PRESS_MS       800   /* wake from screensaver */
-#define BTN_RESET_SHOW_MS      2000   /* start showing hold-to-reset UI */
-#define BTN_FACTORY_RESET_MS   5000   /* commit factory reset */
+#define BTN_RESET_SHOW_MS      3000   /* start showing hold-to-reset UI */
+#define BTN_FACTORY_RESET_MS   8000   /* commit factory reset */
 
 static const char *TAG = "bsp_touch";
 static _Atomic bool s_pressed;
@@ -129,7 +133,7 @@ static void on_factory_reset(void *btn, void *usr)
     if (!atomic_compare_exchange_strong(&s_reset_armed, &expected, true)) {
         return;
     }
-    ESP_LOGW(TAG, "Factory reset triggered (5s hold)");
+    ESP_LOGW(TAG, "Factory reset triggered (%dms hold)", BTN_FACTORY_RESET_MS);
     app_dbg_log("factory reset: hold complete");
     ui_set_reset_progress(100);
     xTaskCreate(factory_reset_task, "factory_rst", 4096, NULL, 5, NULL);
@@ -165,6 +169,8 @@ esp_err_t bsp_touch_init(void)
         TAG, "Touch channel init failed");
 
     touch_sensor_filter_config_t filter_cfg = TOUCH_SENSOR_DEFAULT_FILTER_CONFIG();
+    filter_cfg.benchmark.denoise_lvl = TOUCH_DENOISE_LVL;
+    filter_cfg.data.debounce_cnt = TOUCH_DEBOUNCE_CNT;
     ESP_RETURN_ON_ERROR(
         touch_sensor_config_filter(sens_handle, &filter_cfg),
         TAG, "Touch filter config failed");

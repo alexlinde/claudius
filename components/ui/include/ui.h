@@ -50,6 +50,11 @@ void ui_on_long_press(void);
  * 100 shows "Resetting…". Safe to call from any task. */
 void ui_set_reset_progress(int percent);
 
+/* Dedicated Wi-Fi setup instructions overlay (covers the dashboard).
+ * Used while the softAP is up. Safe to call from any task. */
+void ui_set_setup_mode(bool enabled);
+bool ui_is_setup_mode(void);
+
 /* Anti-ghosting black/white/gray wash. Safe to call from any task; no-op if
  * already washing, sleeping, or showing the factory-reset overlay.
  * ui_tick also starts a wash automatically every 10 minutes while awake. */
